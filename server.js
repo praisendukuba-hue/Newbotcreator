@@ -297,7 +297,16 @@ app.post('/api/store/purchase', async (req, res) => {
   await db.collection('users').doc(userId).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(templateId) }, { merge: true });
   res.json({ success: true });
 });
+// ============ KEEP ALIVE (never sleep) ============
+app.get('/ping', (req, res) => res.json({ pong: true }));
 
+const APP_URL = process.env.APP_URL || '';
+if (APP_URL) {
+  setInterval(() => {
+    axios.get(APP_URL + '/ping', { timeout: 3000 }).catch(() => {});
+  }, 1000);
+  console.log('[keepalive] pinging every 1 second - service will never sleep');
+}
 // ============ CRON ============
 cron.schedule('0 0 * * *', async () => {
   const now = new Date().toISOString();
