@@ -243,7 +243,8 @@ app.post('/api/admin/broadcast', async (req, res) => {
   }
 });
 
-// ============ USER MANAGEMENT (ban / balance) ============app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
+// ============ USER MANAGEMENT (ban / balance) ============
+app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
   try {
     const body = req.body;
     const ref = db.collection('bots').doc(req.params.id).collection('users').doc(String(req.params.uid));
@@ -257,7 +258,6 @@ app.post('/api/admin/broadcast', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
 // ============ TASK PROOFS (approve / decline) ============
 app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
   try {
