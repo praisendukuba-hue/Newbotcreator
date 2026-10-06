@@ -240,6 +240,7 @@ app.post('/api/store/add', async (req, res) => {
   }
 });
 
+
 app.post('/api/store/purchase', async (req, res) => {
   try {
     const { userId, templateId } = req.body;
@@ -250,7 +251,38 @@ app.post('/api/store/purchase', async (req, res) => {
     res.status(500).json({ error: 'Failed to purchase' });
   }
 });
+// ============ OWNER BROADCAST TO ALL BOTS ============
+app.post('/api/admin/broadcast', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
 
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ error: 'Message required' });
+
+    const botsSnap = await db.collection('bots').where('status', '==', 'active').get();
+    let totalSent = 0, totalFailed = 0;
+
+    for (const botDoc of botsSnap.docs) {
+      const token = botDoc.data().token;
+      const uSnap = await db.collection('bots').doc(botDoc.id).collection('users').limit(5000).get();
+      
+      for (const u of uSnap.docs) {
+        try {
+          await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+            chat_id: u.id, text: message, parse_mode: 'HTML'
+          }, { timeout: 5000 });
+          totalSent++;
+        } catch (e) { totalFailed++; }
+        await new Promise(r => setTimeout(r, 40));
+      }
+    }
+
+    res.json({ success: true, sent: totalSent, failed: totalFailed, bots: botsSnap.size });
+  } catch (error) {
+    res.status(500).json({ error: 'Broadcast failed' });
+  }
+});
 // ============ CRON: premium expiry (daily) ============
 cron.schedule('0 0 * * *', async () => {
   try {
