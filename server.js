@@ -22,8 +22,14 @@ async function notifyOwner(text) {
   } catch (e) {}
 }
 
+const SERVER_VERSION = 'v2026.10.07-fix1';
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', botsOnline: Object.keys(engine.activeBots).length });
+  res.json({
+    status: 'ok',
+    version: SERVER_VERSION,
+    botsOnline: Object.keys(engine.activeBots).length,
+    ownerKeySet: !!process.env.OWNER_KEY
+  });
 });
 
 // ============ KEEP ALIVE (never sleep) ============
@@ -41,13 +47,13 @@ app.post('/api/verify-token', async (req, res) => {
       return res.json({ ok: true, username: r.data.result.username, firstName: r.data.result.first_name, id: r.data.result.id });
     }
     res.status(400).json({ ok: false, error: 'Invalid token' });
-  } catch (e) {
-    res.status(400).json({ ok: false, error: 'Failed to verify' });
+  } catch (e) {    res.status(400).json({ ok: false, error: 'Failed to verify' });
   }
 });
 
 // ============ CHECK IF BOT IS ADMIN IN CHANNEL ============
-app.post('/api/check-channel-admin', async (req, res) => {  try {
+app.post('/api/check-channel-admin', async (req, res) => {
+  try {
     const token = req.body.token;
     const channel = req.body.channel;
     const me = await axios.get('https://api.telegram.org/bot' + token + '/getMe', { timeout: 5000 });
@@ -90,13 +96,13 @@ app.post('/api/create-bot', async (req, res) => {
       payoutChannel: data.payoutChannel,
       minW: parseFloat(data.minW) || 0.01,
       maxW: parseFloat(data.maxW) || 100,
-      refBonus: parseFloat(data.refBonus) || 0.01,
-      withdrawFee: parseFloat(data.withdrawFee) || 0,
+      refBonus: parseFloat(data.refBonus) || 0.01,      withdrawFee: parseFloat(data.withdrawFee) || 0,
       mustJoin: mj,
       nonMust: nm,
       tasks: parsedTasks,
       botDetect: data.botDetect === true,
-      officialChannel: 'https://t.me/DAILYUUPA',      users: 0,
+      officialChannel: 'https://t.me/DAILYUUPA',
+      users: 0,
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -139,13 +145,13 @@ app.get('/api/bot/:id', async (req, res) => {
       const w = await db.collection('bots').doc(req.params.id).collection('withdrawals').limit(100).get();
       withdrawals = w.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
       const p = await db.collection('bots').doc(req.params.id).collection('proofs').where('status', '==', 'pending').limit(100).get();
-      proofs = p.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
-    } catch (e) {}
+      proofs = p.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });    } catch (e) {}
 
     const created = b.createdAt ? new Date(b.createdAt).getTime() : Date.now();
     b.hours = Math.max(0, Math.floor((Date.now() - created) / 3600000));
     b.online = !!engine.activeBots[req.params.id];
-    b.userList = userList;    b.withdrawals = withdrawals;
+    b.userList = userList;
+    b.withdrawals = withdrawals;
     b.proofs = proofs;
     res.json({ success: true, bot: Object.assign({ id: doc.id }, b) });
   } catch (e) {
@@ -188,13 +194,26 @@ app.put('/api/bot/:id/settings', async (req, res) => {
         if (v.data.ok) {
           await db.collection('bots').doc(req.params.id).update({ status: 'active', deactivationReason: '' });
           console.log('[settings] auto-reactivated bot ' + req.params.id);
-        }
-      } catch (e) {}
+        }      } catch (e) {}
     }
     
     await engine.restartBot(req.params.id);
-    res.json({ success: true });
-  } catch (e) {    res.status(500).json({ error: e.message });
+
+    // ECHO BACK what was actually saved to verify persistence
+    const after = await db.collection('bots').doc(req.params.id).get();
+    const d = after.exists ? after.data() : {};
+    res.json({
+      success: true,
+      saved: {
+        botDetect: !!d.botDetect,
+        withdrawFee: Number(d.withdrawFee || 0),
+        minW: d.minW,
+        maxW: d.maxW,
+        refBonus: d.refBonus
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -224,14 +243,19 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
     const doc = await db.collection('bots').doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
     const token = doc.data().token;
-    const u = await db.collection('bots').doc(req.params.id).collection('users').limit(5000).get();
-    let sent = 0;
+    const u = await db.collection('bots').doc(req.params.id).collection('users').limit(5000).get();    let sent = 0;
     let failed = 0;
     for (const x of u.docs) {
       try {
         await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
         sent++;
-      } catch (e) { failed++; }
+      } catch (e) {
+        // Fallback: send as plain text if HTML parse fails
+        try {
+          await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message }, { timeout: 5000 });
+          sent++;
+        } catch (e2) { failed++; }
+      }
       await new Promise(function(r) { setTimeout(r, 35); });
     }
     res.json({ success: true, sent: sent, failed: failed });
@@ -243,25 +267,42 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
 // ============ OWNER BROADCAST (ALL BOTS on platform) ============
 app.post('/api/admin/broadcast', async (req, res) => {
   try {
-    const key = req.headers['x-admin-key'];    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    if (!process.env.OWNER_KEY) {
+      return res.status(500).json({ error: 'OWNER_KEY is NOT set in Render Environment Variables!' });
+    }
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
     const message = req.body.message;
     if (!message) return res.status(400).json({ error: 'Message required' });
+
     const bots = await db.collection('bots').where('status', '==', 'active').get();
+    if (bots.empty) return res.json({ success: true, sent: 0, failed: 0, bots: 0, note: 'No active bots have users yet' });
+
     let sent = 0;
     let failed = 0;
     for (const b of bots.docs) {
-      const token = b.data().token;
-      const u = await db.collection('bots').doc(b.id).collection('users').limit(5000).get();
-      for (const x of u.docs) {
-        try {
-          await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
-          sent++;
-        } catch (e) { failed++; }
-        await new Promise(function(r) { setTimeout(r, 35); });
+      try {
+        const token = b.data().token;
+        const u = await db.collection('bots').doc(b.id).collection('users').limit(5000).get();
+        for (const x of u.docs) {
+          try {
+            await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
+            sent++;
+          } catch (e1) {
+            // Fallback: send as plain text if HTML parse fails
+            try {
+              await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message }, { timeout: 5000 });
+              sent++;            } catch (e2) { failed++; }
+          }
+          await new Promise(function(r) { setTimeout(r, 35); });
+        }
+      } catch (eBot) {
+        console.log('[broadcast] bot ' + b.id + ' error: ' + eBot.message);
       }
     }
     res.json({ success: true, sent: sent, failed: failed, bots: bots.size });
   } catch (e) {
+    console.error('[broadcast] fatal:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -292,15 +333,15 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     const p = doc.data();
     
     // If approved and has reward, give user the bonus
-    if (approve && p.reward) {      try {
+    if (approve && p.reward) {
+      try {
         await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
           .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
       } catch (e) {}
       await engine.sendTo(req.params.id, p.uid, '✅ <b>Your task proof was APPROVED!</b>\n\n🎁 You earned <b>' + p.reward + '</b>!');
     } else {
       await engine.sendTo(req.params.id, p.uid, approve
-        ? '✅ <b>Your task proof was APPROVED!</b>'
-        : '❌ <b>Your task proof was declined.</b>');
+        ? '✅ <b>Your task proof was APPROVED!</b>'        : '❌ <b>Your task proof was declined.</b>');
     }
     await ref.delete();
     res.json({ success: true });
@@ -341,15 +382,15 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
       itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId,
       sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now()
     });
-    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');    return { type: type, uid: uid, itemId: itemId, link: d.link };
+    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
+    return { type: type, uid: uid, itemId: itemId, link: d.link };
   }
 
   return { type: 'unknown' };
 }
 
 app.post('/api/check-payment', async (req, res) => {
-  try {
-    const memo = req.body.memo;
+  try {    const memo = req.body.memo;
     if (!memo) return res.status(400).json({ error: 'Memo required' });
     const snap = await db.collection('payments').where('memo', '==', memo).where('status', '==', 'confirmed').limit(1).get();
     if (snap.empty) return res.json({ confirmed: false });
@@ -390,15 +431,15 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
     await ref.update({ status: 'confirmed', payType: result.type, link: result.link || null });
     res.json({ success: true, result: result });
   } catch (e) {
-    res.status(500).json({ error: e.message });  }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============ PROFILE ============
 app.get('/api/user/:uid/profile', async (req, res) => {
   try {
     const doc = await db.collection('users').doc(req.params.uid).get();
-    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });
-  } catch (e) {
+    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -439,15 +480,15 @@ app.post('/api/store/upload', async (req, res) => {
       link: b.link, price: b.price || '1 TON', sellerId: b.sellerId, sellerWallet: b.wallet || '',
       status: 'available', active: true, createdAt: Date.now()
     });
-    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');    res.json({ success: true, id: doc.id });
+    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');
+    res.json({ success: true, id: doc.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post('/api/store/purchase', async (req, res) => {
-  try {
-    const b = req.body;
+  try {    const b = req.body;
     await db.collection('users').doc(b.userId).set({
       purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId)
     }, { merge: true });
@@ -473,7 +514,7 @@ cron.schedule('0 0 * * *', async () => {
 // ============ START ============
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
-  console.log('Clur Backend on port ' + PORT);
+  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
   engine.loadAllBots();
 
   const APP_URL = process.env.APP_URL || '';
