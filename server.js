@@ -95,7 +95,7 @@ app.post('/api/create-bot', async (req, res) => {
       mustJoin: mj,
       nonMust: nm,
       tasks: parsedTasks,
-      botDetect: !!data.botDetect,
+      botDetect: data.botDetect === true,
       officialChannel: 'https://t.me/DAILYUUPA',      users: 0,
       status: 'active',
       createdAt: new Date().toISOString(),
@@ -173,15 +173,28 @@ app.put('/api/bot/:id/settings', async (req, res) => {
         return { n: t.n, l: t.l, reward: Number(t.reward || 0) };
       });
     }
-    if (body.botDetect !== undefined) u.botDetect = !!body.botDetect;
+    if (body.botDetect !== undefined) u.botDetect = body.botDetect === true;
     if (body.coAdmins !== undefined) {
       u.coAdmins = typeof body.coAdmins === 'string' ? body.coAdmins.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : body.coAdmins;
     }
+    
     await db.collection('bots').doc(req.params.id).update(u);
+    
+    // AUTO-REACTIVATE: if bot was wrongly deactivated, re-verify token and reactivate
+    const doc = await db.collection('bots').doc(req.params.id).get();
+    if (doc.exists && doc.data().status === 'deactivated') {
+      try {
+        const v = await axios.get('https://api.telegram.org/bot' + doc.data().token + '/getMe', { timeout: 5000 });
+        if (v.data.ok) {
+          await db.collection('bots').doc(req.params.id).update({ status: 'active', deactivationReason: '' });
+          console.log('[settings] auto-reactivated bot ' + req.params.id);
+        }
+      } catch (e) {}
+    }
+    
     await engine.restartBot(req.params.id);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {    res.status(500).json({ error: e.message });
   }
 });
 
@@ -194,7 +207,8 @@ app.delete('/api/bot/:id', async (req, res) => {
       const snap = await db.collection('bots').doc(req.params.id).collection(sub).limit(500).get();
       const batch = db.batch();
       snap.docs.forEach(function(d) { batch.delete(d.ref); });
-      await batch.commit();    }
+      await batch.commit();
+    }
     await db.collection('bots').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (e) {
@@ -229,8 +243,7 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
 // ============ OWNER BROADCAST (ALL BOTS on platform) ============
 app.post('/api/admin/broadcast', async (req, res) => {
   try {
-    const key = req.headers['x-admin-key'];
-    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const key = req.headers['x-admin-key'];    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
     const message = req.body.message;
     if (!message) return res.status(400).json({ error: 'Message required' });
     const bots = await db.collection('bots').where('status', '==', 'active').get();
@@ -243,7 +256,8 @@ app.post('/api/admin/broadcast', async (req, res) => {
         try {
           await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
           sent++;
-        } catch (e) { failed++; }        await new Promise(function(r) { setTimeout(r, 35); });
+        } catch (e) { failed++; }
+        await new Promise(function(r) { setTimeout(r, 35); });
       }
     }
     res.json({ success: true, sent: sent, failed: failed, bots: bots.size });
@@ -258,7 +272,7 @@ app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
     const body = req.body;
     const ref = db.collection('bots').doc(req.params.id).collection('users').doc(String(req.params.uid));
     const u = {};
-    if (body.banned !== undefined) u.banned = !!body.banned;
+    if (body.banned !== undefined) u.banned = body.banned === true;
     if (body.addBalance !== undefined) u.balance = admin.firestore.FieldValue.increment(parseFloat(body.addBalance));
     if (body.setBalance !== undefined) u.balance = parseFloat(body.setBalance);
     await ref.set(u, { merge: true });
@@ -278,8 +292,7 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     const p = doc.data();
     
     // If approved and has reward, give user the bonus
-    if (approve && p.reward) {
-      try {
+    if (approve && p.reward) {      try {
         await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
           .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
       } catch (e) {}
@@ -292,7 +305,8 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     await ref.delete();
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });  }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============ PAYMENTS ============
@@ -327,8 +341,7 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
       itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId,
       sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now()
     });
-    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
-    return { type: type, uid: uid, itemId: itemId, link: d.link };
+    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');    return { type: type, uid: uid, itemId: itemId, link: d.link };
   }
 
   return { type: 'unknown' };
@@ -341,7 +354,8 @@ app.post('/api/check-payment', async (req, res) => {
     const snap = await db.collection('payments').where('memo', '==', memo).where('status', '==', 'confirmed').limit(1).get();
     if (snap.empty) return res.json({ confirmed: false });
     const p = snap.docs[0].data();
-    res.json({ confirmed: true, type: p.payType, link: p.link || null });  } catch (e) {
+    res.json({ confirmed: true, type: p.payType, link: p.link || null });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -376,8 +390,7 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
     await ref.update({ status: 'confirmed', payType: result.type, link: result.link || null });
     res.json({ success: true, result: result });
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.status(500).json({ error: e.message });  }
 });
 
 // ============ PROFILE ============
@@ -390,7 +403,8 @@ app.get('/api/user/:uid/profile', async (req, res) => {
   }
 });
 
-// ============ STORE ============app.get('/api/store/templates', async (req, res) => {
+// ============ STORE ============
+app.get('/api/store/templates', async (req, res) => {
   try {
     const snap = await db.collection('storeTemplates').where('active', '==', true).get();
     const t = [];
@@ -425,8 +439,7 @@ app.post('/api/store/upload', async (req, res) => {
       link: b.link, price: b.price || '1 TON', sellerId: b.sellerId, sellerWallet: b.wallet || '',
       status: 'available', active: true, createdAt: Date.now()
     });
-    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');
-    res.json({ success: true, id: doc.id });
+    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');    res.json({ success: true, id: doc.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -439,7 +452,8 @@ app.post('/api/store/purchase', async (req, res) => {
       purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId)
     }, { merge: true });
     res.json({ success: true });
-  } catch (e) {    res.status(500).json({ error: e.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
