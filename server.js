@@ -72,6 +72,11 @@ app.post('/api/create-bot', async (req, res) => {
     const mj = (data.mustJoin || []).slice(0, 10);
     const nm = (data.nonMust || []).slice(0, Math.max(0, 10 - mj.length));
 
+    // Parse tasks preserving reward field
+    const parsedTasks = (data.tasks || []).map(function(t) {
+      return { n: t.n, l: t.l, reward: Number(t.reward || 0) };
+    });
+
     const botData = {
       ownerId: data.ownerId,
       coAdmins: [],
@@ -86,12 +91,12 @@ app.post('/api/create-bot', async (req, res) => {
       minW: parseFloat(data.minW) || 0.01,
       maxW: parseFloat(data.maxW) || 100,
       refBonus: parseFloat(data.refBonus) || 0.01,
+      withdrawFee: parseFloat(data.withdrawFee) || 0,
       mustJoin: mj,
       nonMust: nm,
-      tasks: data.tasks || [],
+      tasks: parsedTasks,
       botDetect: !!data.botDetect,
-      officialChannel: 'https://t.me/DAILYUUPA',
-      users: 0,
+      officialChannel: 'https://t.me/DAILYUUPA',      users: 0,
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -140,12 +145,12 @@ app.get('/api/bot/:id', async (req, res) => {
     const created = b.createdAt ? new Date(b.createdAt).getTime() : Date.now();
     b.hours = Math.max(0, Math.floor((Date.now() - created) / 3600000));
     b.online = !!engine.activeBots[req.params.id];
-    b.userList = userList;
-    b.withdrawals = withdrawals;
+    b.userList = userList;    b.withdrawals = withdrawals;
     b.proofs = proofs;
     res.json({ success: true, bot: Object.assign({ id: doc.id }, b) });
   } catch (e) {
-    res.status(500).json({ error: e.message });  }
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============ SETTINGS ============
@@ -156,13 +161,18 @@ app.put('/api/bot/:id/settings', async (req, res) => {
     if (body.minW !== undefined) u.minW = parseFloat(body.minW);
     if (body.maxW !== undefined) u.maxW = parseFloat(body.maxW);
     if (body.refBonus !== undefined) u.refBonus = parseFloat(body.refBonus);
+    if (body.withdrawFee !== undefined) u.withdrawFee = parseFloat(body.withdrawFee) || 0;
     if (body.mustJoin !== undefined) {
       u.mustJoin = typeof body.mustJoin === 'string' ? body.mustJoin.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.mustJoin;
     }
     if (body.nonMust !== undefined) {
       u.nonMust = typeof body.nonMust === 'string' ? body.nonMust.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.nonMust;
     }
-    if (body.tasks !== undefined) u.tasks = body.tasks;
+    if (body.tasks !== undefined) {
+      u.tasks = (body.tasks || []).map(function(t) {
+        return { n: t.n, l: t.l, reward: Number(t.reward || 0) };
+      });
+    }
     if (body.botDetect !== undefined) u.botDetect = !!body.botDetect;
     if (body.coAdmins !== undefined) {
       u.coAdmins = typeof body.coAdmins === 'string' ? body.coAdmins.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : body.coAdmins;
@@ -184,8 +194,7 @@ app.delete('/api/bot/:id', async (req, res) => {
       const snap = await db.collection('bots').doc(req.params.id).collection(sub).limit(500).get();
       const batch = db.batch();
       snap.docs.forEach(function(d) { batch.delete(d.ref); });
-      await batch.commit();
-    }
+      await batch.commit();    }
     await db.collection('bots').doc(req.params.id).delete();
     res.json({ success: true });
   } catch (e) {
@@ -193,8 +202,9 @@ app.delete('/api/bot/:id', async (req, res) => {
   }
 });
 
-// ============ BOT BROADCAST ============
-app.post('/api/bot/:id/broadcast', async (req, res) => {  try {
+// ============ BOT BROADCAST (owner's own bot only) ============
+app.post('/api/bot/:id/broadcast', async (req, res) => {
+  try {
     const message = req.body.message;
     if (!message) return res.status(400).json({ error: 'Message required' });
     const doc = await db.collection('bots').doc(req.params.id).get();
@@ -216,7 +226,7 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {  try {
   }
 });
 
-// ============ OWNER BROADCAST (ALL BOTS) ============
+// ============ OWNER BROADCAST (ALL BOTS on platform) ============
 app.post('/api/admin/broadcast', async (req, res) => {
   try {
     const key = req.headers['x-admin-key'];
@@ -233,8 +243,7 @@ app.post('/api/admin/broadcast', async (req, res) => {
         try {
           await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
           sent++;
-        } catch (e) { failed++; }
-        await new Promise(function(r) { setTimeout(r, 35); });
+        } catch (e) { failed++; }        await new Promise(function(r) { setTimeout(r, 35); });
       }
     }
     res.json({ success: true, sent: sent, failed: failed, bots: bots.size });
@@ -258,6 +267,7 @@ app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // ============ TASK PROOFS (approve / decline) ============
 app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
   try {
@@ -266,14 +276,23 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Proof already resolved' });
     const p = doc.data();
+    
+    // If approved and has reward, give user the bonus
+    if (approve && p.reward) {
+      try {
+        await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
+          .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
+      } catch (e) {}
+      await engine.sendTo(req.params.id, p.uid, '✅ <b>Your task proof was APPROVED!</b>\n\n🎁 You earned <b>' + p.reward + '</b>!');
+    } else {
+      await engine.sendTo(req.params.id, p.uid, approve
+        ? '✅ <b>Your task proof was APPROVED!</b>'
+        : '❌ <b>Your task proof was declined.</b>');
+    }
     await ref.delete();
-    await engine.sendTo(req.params.id, p.uid, approve
-      ? '✅ <b>Your task proof was APPROVED!</b>'
-      : '❌ <b>Your task proof was declined.</b>');
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.status(500).json({ error: e.message });  }
 });
 
 // ============ PAYMENTS ============
@@ -293,6 +312,7 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
   if (type === 'UPLOAD') {
     return { type: type, uid: parts[2] };
   }
+  
   if (type === 'BUY') {
     const itemId = parts[2];
     const uid = parts[3];
@@ -321,8 +341,7 @@ app.post('/api/check-payment', async (req, res) => {
     const snap = await db.collection('payments').where('memo', '==', memo).where('status', '==', 'confirmed').limit(1).get();
     if (snap.empty) return res.json({ confirmed: false });
     const p = snap.docs[0].data();
-    res.json({ confirmed: true, type: p.payType, link: p.link || null });
-  } catch (e) {
+    res.json({ confirmed: true, type: p.payType, link: p.link || null });  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -341,7 +360,8 @@ app.post('/api/process-payment', async (req, res) => {
     res.json({ success: true, result: result });
   } catch (e) {
     res.status(500).json({ error: e.message });
-  }});
+  }
+});
 
 // Naira manual approval
 app.post('/api/admin/payments/:pid/approve', async (req, res) => {
@@ -370,8 +390,7 @@ app.get('/api/user/:uid/profile', async (req, res) => {
   }
 });
 
-// ============ STORE ============
-app.get('/api/store/templates', async (req, res) => {
+// ============ STORE ============app.get('/api/store/templates', async (req, res) => {
   try {
     const snap = await db.collection('storeTemplates').where('active', '==', true).get();
     const t = [];
@@ -390,7 +409,8 @@ app.post('/api/store/add', async (req, res) => {
     if (!item.name || !item.price) return res.status(400).json({ error: 'Name and price required' });
     const doc = await db.collection('storeTemplates').add(Object.assign({}, item, {
       sellerId: 'OWNER', sellerWallet: '', status: 'available', active: true, createdAt: Date.now()
-    }));    res.json({ success: true, id: doc.id });
+    }));
+    res.json({ success: true, id: doc.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -419,8 +439,7 @@ app.post('/api/store/purchase', async (req, res) => {
       purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId)
     }, { merge: true });
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {    res.status(500).json({ error: e.message });
   }
 });
 
@@ -439,7 +458,8 @@ cron.schedule('0 0 * * *', async () => {
 
 // ============ START ============
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, function() {  console.log('Clur Backend on port ' + PORT);
+app.listen(PORT, function() {
+  console.log('Clur Backend on port ' + PORT);
   engine.loadAllBots();
 
   const APP_URL = process.env.APP_URL || '';
