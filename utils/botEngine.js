@@ -12,19 +12,11 @@ const awaiting = {};
 const lastMsg = {};
 const botErrors = {};
 
-// ==========================================================
-// ALLOWED AUTO PAY COINS
-// ==========================================================
-
 const AUTO_PAY_COINS = ['TON', 'NOT', 'DOGS', 'USDT', 'USDC', 'BNB'];
 
 function isAutoPayCoin(cur) {
   return AUTO_PAY_COINS.includes(String(cur || '').toUpperCase());
 }
-
-// ==========================================================
-// HELPERS
-// ==========================================================
 
 const esc = (s) =>
   String(s == null ? '' : s)
@@ -48,9 +40,6 @@ const chanUrl = (ch) => {
   if (/^-?\d/.test(s)) return 'https://t.me/c/' + s;
   return 'https://t.me/' + s.replace('@', '');
 };
-// ==========================================================
-// CURRENCY HELPERS
-// ==========================================================
 
 function getPTConfig(cur) {
   const c = String(cur || '').trim().toLowerCase();
@@ -58,8 +47,7 @@ function getPTConfig(cur) {
   const bscGateway = 'https://pt-kappa-ten.vercel.app';
   
   if (c === 'ton') return { url: tonGateway + '/pay/ton', type: 'ton' };
-  if (c === 'not') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'NOT' };
-  if (c === 'usdt') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'USDT' };
+  if (c === 'not') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'NOT' };  if (c === 'usdt') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'USDT' };
   if (c === 'usdc') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'USDC' };
   if (c === 'dogs') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'DOGS' };
   if (c === 'bnb') return { url: bscGateway + '/pay/bnb', type: 'bnb' };
@@ -70,33 +58,13 @@ function xrAsset(cur) {
   return String(cur || '').trim().toUpperCase();
 }
 
-// ==========================================================
-// PAYMENT METHOD NORMALIZER
-// ==========================================================
-
 function normalizePayMethod(value) {
-  const s = String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
-
-  if (['autopay1', 'pt', 'ptexchange', 'btexchange', 'bt'].includes(s)) {
-    return 'AutoPay1';
-  }
-
-  if (['autopay2', 'xrocket', 'acerocket', 'ace'].includes(s)) {
-    return 'AutoPay2';
-  }
-
-  if (['manual', 'manualpayment'].includes(s)) {
-    return 'Manual';
-  }
-
+  const s = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (['autopay1', 'pt', 'ptexchange', 'btexchange', 'bt'].includes(s)) return 'AutoPay1';
+  if (['autopay2', 'xrocket', 'acerocket', 'ace'].includes(s)) return 'AutoPay2';
+  if (['manual', 'manualpayment'].includes(s)) return 'Manual';
   return value || 'Manual';
 }
-
-// ==========================================================
-// DECIMAL NORMALIZER// ==========================================================
 
 function cleanAmount(value) {
   const n = Number(value);
@@ -104,10 +72,6 @@ function cleanAmount(value) {
   if (n <= 0) return null;
   return n.toFixed(12).replace(/\.?0+$/, '');
 }
-
-// ==========================================================
-// PROVIDER ERROR EXTRACTOR
-// ==========================================================
 
 function providerError(error, fallback) {
   try {
@@ -128,24 +92,16 @@ function providerError(error, fallback) {
   return fallback || 'Payment provider error';
 }
 
-// ==========================================================
-// AWAITING STATE
-// ==========================================================
-
 function setA(key, type, extra) {
   awaiting[key] = Object.assign({ type: type, exp: Date.now() + 300000 }, extra || {});
 }
 
-function getA(key) {
-  const a = awaiting[key];
+function getA(key) {  const a = awaiting[key];
   if (!a) return null;
   if (Date.now() > a.exp) { delete awaiting[key]; return null; }
   return a;
 }
 
-// ==========================================================
-// USER
-// ==========================================================
 async function getUser(botId, uid) {
   const ref = db.collection('bots').doc(botId).collection('users').doc(String(uid));
   const snap = await ref.get();
@@ -157,28 +113,25 @@ async function getUser(botId, uid) {
   return { ref, data: snap.data(), isNew: false };
 }
 
-// ==========================================================
-// SEND
-// ==========================================================
-
 function sendTo(botId, uid, text) {
   const info = activeBots[botId];
   if (!info) return Promise.resolve(false);
   return info.bot.sendMessage(uid, text, { parse_mode: 'HTML' }).then(() => true).catch(() => false);
 }
 
-// ==========================================================
-// AUTH ERROR
-// ==========================================================
-
 function isAuthError(err) {
   const msg = String((err && (err.message || err.code || err.description)) || err).toLowerCase();
   return /401|403|unauthorized|bot was blocked|token invalid|deleted/i.test(msg);
 }
 
-// ==========================================================
-// PT EXCHANGE REQUEST
-// ==========================================================
+// Sanitize description for xRocket (remove special chars, limit length)
+function sanitizeDescription(text) {
+  if (!text) return '';
+  // Remove special characters, keep only alphanumeric and basic punctuation
+  const cleaned = String(text).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
+  // Limit to 50 characters (xRocket requirement)
+  return cleaned.substring(0, 50);
+}
 
 async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment }) {
   if (!apiKey) throw new Error('AutoPay1 API key is missing.');
@@ -192,9 +145,9 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
     payload.comment = comment || 'Clur Bot withdrawal';
   } else if (ptConfig.type === 'jetton') {
     payload.jetton_symbol = ptConfig.symbol;
+    payload.comment = comment || 'Clur Bot withdrawal';  } else if (ptConfig.type === 'bnb') {
     payload.comment = comment || 'Clur Bot withdrawal';
-  } else if (ptConfig.type === 'bnb') {
-    payload.comment = comment || 'Clur Bot withdrawal';  }
+  }
 
   console.log(`[engine:${botId}] AutoPay1 request: ${currency} → ${wallet} (${amount})`);
   console.log(`[engine:${botId}] PT URL: ${ptConfig.url}`);
@@ -225,28 +178,31 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
   return { success: true, txHash: txHash, data: d };
 }
 
-// ==========================================================
-// XROCKET PAYOUT
-// ==========================================================
-
 async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, description }) {
   if (!apiKey) throw new Error('AutoPay2 API key is missing.');
 
   const asset = xrAsset(currency);
   const clientPayoutId = 'CLUR-' + botId + '-' + uid + '-' + Date.now();
 
+  // xRocket payload - description is OPTIONAL and must be sanitized
   const payload = {
     clientPayoutId,
     target: String(uid),
     targetType: 'telegram_user_id',
     asset,
-    amount: String(amount),
-    description: description || 'Clur Bot Creator withdrawal'
+    amount: String(amount)
   };
+
+  // Only add description if it's valid (sanitized and not empty)
+  const sanitizedDesc = sanitizeDescription(description);  if (sanitizedDesc) {
+    payload.description = sanitizedDesc;
+  }
+
   const url = 'https://pay.api.xrocket.exchange/api/v1/payouts';
 
   console.log(`[engine:${botId}] AutoPay2 request: ${asset} → Telegram user ${uid} (${amount})`);
   console.log(`[engine:${botId}] xRocket URL: ${url}`);
+  console.log(`[engine:${botId}] xRocket payload:`, JSON.stringify(payload));
 
   const response = await axios.post(url, payload, {
     headers: {
@@ -285,14 +241,10 @@ async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, descri
   throw new Error('xRocket returned an unknown payout status: ' + (d.status || 'missing status'));
 }
 
-// ==========================================================
-// START BOT
-// ==========================================================
-
 function startBot(cfgIn) {
   const cfg = Object.assign({}, cfgIn);
-  const botId = cfg.id;
-    try { if (activeBots[botId]) stopBot(botId); } catch (e) {}
+  const botId = cfg.id;  
+  try { if (activeBots[botId]) stopBot(botId); } catch (e) {}
   const prev = tokenOwner[cfg.token];
   if (prev && prev !== botId) stopBot(prev);
 
@@ -340,8 +292,8 @@ function startBot(cfgIn) {
     }
     console.log(`[engine:${botId}] ⚠️ Could not verify token after 3 attempts.`);
   })();
-
-  bot.on('polling_error', (err) => {    const msg = String((err && err.message) || err);
+  bot.on('polling_error', (err) => {
+    const msg = String((err && err.message) || err);
     botErrors[botId] = (botErrors[botId] || 0) + 1;
     if (isAuthError(err)) {
       deactivate('Auth error: ' + msg.slice(0, 100));
@@ -389,8 +341,8 @@ function startBot(cfgIn) {
       botDetect = d.botDetect === true;
       name = d.name || name;
       fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);
-      return true;
-    } catch (e) {      console.log(`[engine:${botId}] refreshCfg error: ${e.message}`);
+      return true;    } catch (e) {
+      console.log(`[engine:${botId}] refreshCfg error: ${e.message}`);
       return true;
     }
   }
@@ -438,8 +390,8 @@ function startBot(cfgIn) {
     const rows = [[{ text: '💼 Official Channel', url: OFFICIAL_URL }]];
     let channelNum = 1;
     for (const ch of mustJoin) {
-      rows.push([{ text: '📢 Channel ' + channelNum + ' (Required)', url: chanUrl(ch) }]);
-      channelNum++;    }
+      rows.push([{ text: '📢 Channel ' + channelNum + ' (Required)', url: chanUrl(ch) }]);      channelNum++;
+    }
     for (const ch of nonMust) {
       rows.push([{ text: '📢 Channel ' + channelNum, url: chanUrl(ch) }]);
       channelNum++;
@@ -487,8 +439,8 @@ function startBot(cfgIn) {
     const txt = (msg.text || '').trim();
     if (!txt) return;
     if (txt.startsWith('/')) { delete awaiting[key]; return; }
-    const got = await getUser(botId, uid);
-    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
+    const got = await getUser(botId, uid);    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
+
     const st = getA(key);
     if (st) {
       delete awaiting[key];
@@ -536,8 +488,8 @@ function startBot(cfgIn) {
     const uid = cq.from.id;
     const key = botId + ':' + uid;
 
-    if (cq.data === 'continue') {
-      await refreshCfg();      for (const ch of mustJoin) {
+    if (cq.data === 'continue') {      await refreshCfg();
+      for (const ch of mustJoin) {
         const chan = normchan(ch);
         let m;
         try { m = await bot.getChatMember(chan, uid); }
@@ -585,8 +537,8 @@ function startBot(cfgIn) {
 
     if (cq.data && (cq.data.indexOf('approve_') === 0 || cq.data.indexOf('decline_') === 0)) {
       const approve = cq.data.indexOf('approve_') === 0;
-      const pid = cq.data.split('_')[1];
-      const ref = db.collection('bots').doc(botId).collection('proofs').doc(pid);      const doc = await ref.get();
+      const pid = cq.data.split('_')[1];      const ref = db.collection('bots').doc(botId).collection('proofs').doc(pid);
+      const doc = await ref.get();
       if (doc.exists) {
         const p = doc.data();
         if (approve && p.reward) {
@@ -634,8 +586,8 @@ function startBot(cfgIn) {
       { parse_mode: 'HTML', disable_web_page_preview: true }
     ).catch(() => {});
   }
-
-  async function handleInvite(uid, got) {    const me = await bot.getMe();
+  async function handleInvite(uid, got) {
+    const me = await bot.getMe();
     await bot.sendMessage(uid,
       '<b>🎁 INVITE & EARN</b>\n\n━━━━━━━━━━━━━━\n\n💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>\n\n🎁 Your referrals: ' + (got.data.refs || 0) + '\n\n━━━━━━━━━━━━━━\n\nYour link:\n<code>https://t.me/' + me.username + '?start=' + uid + '</code>',
       { parse_mode: 'HTML' }
@@ -683,13 +635,9 @@ function startBot(cfgIn) {
       '⏳ <b>Processing withdrawal...</b>\n\n' +
       '💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n' +
       (feeAmount > 0 ? '💳 Fee: <b>' + feeAmount + ' ' + esc(currency) + '</b>\n\n' : '') +
-      '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +
-      walletLine,      { parse_mode: 'HTML' }
+      '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +      walletLine,
+      { parse_mode: 'HTML' }
     ).catch(() => {});
-
-    // ======================================================
-    // AUTOPAY 1 - PT EXCHANGE
-    // ======================================================
 
     if (pay === 'AutoPay1') {
       if (!isAutoPayCoin(currency)) {
@@ -714,10 +662,6 @@ function startBot(cfgIn) {
       }
     }
 
-    // ======================================================
-    // AUTOPAY 2 - XROCKET
-    // ======================================================
-
     if (pay === 'AutoPay2') {
       if (!isAutoPayCoin(currency)) {
         return bot.sendMessage(uid, '❌ <b>AutoPay2 does not support ' + esc(currency) + '</b>\n\nOnly these coins support auto payment:\n' + AUTO_PAY_COINS.join(', ') + '\n\nPlease switch to Manual payment or use a supported coin.', { parse_mode: 'HTML' }).catch(() => {});
@@ -733,23 +677,19 @@ function startBot(cfgIn) {
           await notifyPayout('⏳ <b>AutoPay2 PENDING</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n📦 Status: ' + result.status);
           return bot.sendMessage(uid, '⏳ <b>Payment submitted</b>\n\n💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n📦 Status: <b>PENDING</b>\n\n💰 <b>Balance NOT deducted yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
         }
+
         await got.ref.update({ balance: FieldValue.increment(-amount) });
         await logWithdraw(uid, amount, 'paid', 'telegram', payoutId, feeAmount, receivedAmount, { provider: 'xRocket', providerStatus: 'finished', clientPayoutId: result.clientPayoutId });
         await notifyPayout('✅ <b>AutoPay2 PAID</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + ' (received ' + receivedAmount + ')' + (payoutId ? '\n\n💳 Payout ID: <code>' + esc(payoutId) + '</code>' : ''));
         const newBalance = Number(got.data.balance || 0) - amount;
         return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, 'telegram', payoutId, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
-        const err = providerError(e, 'xRocket payment failed');
-        console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
+        const err = providerError(e, 'xRocket payment failed');        console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
         await logWithdraw(uid, amount, 'failed', 'telegram', null, feeAmount, receivedAmount, { provider: 'xRocket', error: err });
         await notifyPayout('❌ <b>AutoPay2 FAILED</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n⚠️ ' + esc(err).slice(0, 300));
         return bot.sendMessage(uid, '❌ <b>Payment failed</b>\n\n⚠️ ' + esc(err).slice(0, 250) + '\n\n💰 Balance NOT deducted.', { parse_mode: 'HTML' }).catch(() => {});
       }
     }
-
-    // ======================================================
-    // MANUAL
-    // ======================================================
 
     try {
       await got.ref.update({ balance: FieldValue.increment(-amount) });
@@ -782,7 +722,8 @@ function stopBot(botId) {
   try { info.bot.stopPolling(); } catch (e) {}
   try { delete tokenOwner[info.cfg.token]; } catch (e) {}
   delete activeBots[botId];
-  console.log(`[engine:${botId}] ⏹ stopped`);}
+  console.log(`[engine:${botId}] ⏹ stopped`);
+}
 
 async function restartBot(botId) {
   stopBot(botId);
@@ -792,8 +733,7 @@ async function restartBot(botId) {
     const cfg = Object.assign({ id: snap.id }, snap.data());
     if (cfg.status === 'active') startBot(cfg);
   } catch (e) {
-    console.error(`[engine:${botId}] ❌ restart error: ${e.message}`);
-  }
+    console.error(`[engine:${botId}] ❌ restart error: ${e.message}`);  }
 }
 
 async function loadAllBots() {
