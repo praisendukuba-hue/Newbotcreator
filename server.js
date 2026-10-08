@@ -47,8 +47,7 @@ function safeAmount(value) {
   return n;
 }
 
-function makeClientId(prefix, botId, uid) {  return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-}
+function makeClientId(prefix, botId, uid) {  return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');}
 
 async function notifyOwner(text) {
   if (!process.env.ADMIN_TELEGRAM_BOT_TOKEN || !process.env.ADMIN_CHAT_ID) return;
@@ -97,8 +96,7 @@ app.post('/api/check-channel-admin', async (req, res) => {
     const st = m.data.result.status;
     res.json({ ok: true, isAdmin: st === 'administrator' || st === 'creator', status: st });
   } catch (e) {    res.json({ ok: true, isAdmin: false, status: 'error' });
-  }
-});
+  }});
 
 app.post('/api/create-bot', async (req, res) => {
   try {
@@ -146,6 +144,10 @@ app.get('/api/bot/:id', async (req, res) => {
     const doc = await db.collection('bots').doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
     const b = doc.data();    delete b.token; delete b.apiKey;
+    
+    // ✅ FIX 1: Normalize fee and botDetect    b.withdrawFee = Number(b.withdrawFee || 0);
+    b.botDetect = !!b.botDetect;
+    
     let userList = [], withdrawals = [], proofs = [];
     try {
       const u = await db.collection('bots').doc(req.params.id).collection('users').limit(300).get();
@@ -188,7 +190,19 @@ app.put('/api/bot/:id/settings', async (req, res) => {
     }
     await db.collection('bots').doc(req.params.id).update(u);
     await engine.restartBot(req.params.id);
-    res.json({ success: true });
+    
+    // ✅ FIX 2: Echo back what was actually saved
+    const after = await db.collection('bots').doc(req.params.id).get();
+    const d = after.exists ? after.data() : {};
+    res.json({      success: true,
+      saved: {
+        withdrawFee: Number(d.withdrawFee || 0),
+        botDetect: !!d.botDetect,
+        minW: d.minW,
+        maxW: d.maxW,
+        refBonus: d.refBonus
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -229,8 +243,7 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
     res.json({ success: true, sent: sent, failed: failed });
   } catch (e) {
     res.status(500).json({ error: e.message });
-  }
-});
+  }});
 
 app.post('/api/admin/broadcast', async (req, res) => {
   try {
@@ -279,8 +292,7 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'Proof already resolved' });
     const p = doc.data();
     if (approve && p.reward) {
-      try {
-        await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
+      try {        await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
           .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
       } catch (e) {}
       await engine.sendTo(req.params.id, p.uid, '✅ <b>Your task proof was APPROVED!</b>\n\n🎁 You earned <b>' + p.reward + '</b>!');
@@ -329,8 +341,7 @@ async function payWithPTExchange({ wallet, amount, currency, clientWithdrawalId 
   console.log('[PT Exchange] Response:', response.status, JSON.stringify(response.data).slice(0, 300));
   
   if (response.status < 200 || response.status >= 300) {
-    const error = response.data || {};
-    const message = error.error || error.message || error.detail || ('PT Exchange returned HTTP ' + response.status);
+    const error = response.data || {};    const message = error.error || error.message || error.detail || ('PT Exchange returned HTTP ' + response.status);
     const err = new Error(message);
     err.status = response.status;
     err.providerResponse = response.data;
@@ -379,8 +390,7 @@ async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId
   
   const data = response.data || {};
   const status = cleanString(data.status).toLowerCase();
-  
-  if (status === 'failed') {
+    if (status === 'failed') {
     const err = new Error('xRocket payout failed');
     err.status = response.status;
     err.providerResponse = data;
@@ -429,8 +439,7 @@ app.post('/api/withdraw', async (req, res) => {  try {
         console.error('[PT Exchange]', e.message);
         return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', status: 'failed', error: e.message, clientId });
       }
-    }
-    
+    }    
     if (provider === 'AutoPay2') {
       try {
         const result = await payWithXRocket({ telegramUserId, amount, currency, clientPayoutId: clientId, description: body.description || 'Bot reward withdrawal' });
@@ -480,7 +489,6 @@ app.post('/pay/jetton', async (req, res) => {
     return res.status(e.status || 502).json({ ok: false, error: e.message });
   }
 });
-
 app.post('/pay/xrocket', async (req, res) => {
   try {
     const body = req.body || {};
@@ -529,8 +537,7 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
     await db.collection('users').doc(uid).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(itemId) }, { merge: true });
     await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });
     await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
-    return { type: type, uid: uid, itemId: itemId, link: d.link };
-  }
+    return { type: type, uid: uid, itemId: itemId, link: d.link };  }
   return { type: 'unknown' };
 }
 
@@ -579,8 +586,7 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
 app.get('/api/user/:uid/profile', async (req, res) => {
   try {
     const doc = await db.collection('users').doc(req.params.uid).get();
-    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });
-  } catch (e) {
+    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
@@ -629,7 +635,6 @@ app.post('/api/store/purchase', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
 cron.schedule('0 0 * * *', async () => {
   try {
     const now = new Date().toISOString();
