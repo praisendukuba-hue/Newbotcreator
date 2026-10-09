@@ -643,6 +643,39 @@ cron.schedule('0 0 * * *', async () => {
   } catch (e) {    console.error('[cron] premium expiry error:', e.message);
   }
 });
+app.get('/api/admin/chats', async function (req, res) {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const snap = await db.collection('chats').orderBy('lastAt', 'desc').limit(50).get();
+    const chats = [];
+    snap.forEach(function (d) { chats.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, chats: chats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/chat/:uid', async function (req, res) {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const snap = await db.collection('chats').doc(req.params.uid).collection('messages').orderBy('at', 'asc').limit(200).get();
+    const messages = [];
+    snap.forEach(function (d) { messages.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, messages: messages });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/chat/:uid/send', async function (req, res) {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const text = req.body.text;
+    if (!text) return res.status(400).json({ error: 'Text required' });
+    await db.collection('chats').doc(req.params.uid).collection('messages').add({ from: 'admin', text: text, at: Date.now() });
+    await db.collection('chats').doc(req.params.uid).set({ userId: req.params.uid, lastMsg: text, lastAt: Date.now() }, { merge: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
