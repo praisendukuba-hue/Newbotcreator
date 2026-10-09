@@ -677,6 +677,53 @@ app.post('/api/admin/chat/:uid/send', async function (req, res) {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/admin/payments', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var snap = await db.collection('payments').where('status', '==', 'pending').get();
+    var payments = [];
+    snap.forEach(function (d) { payments.push(Object.assign({ id: d.id }, d.data())); });
+    payments.sort(function (a, b) { return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0); });
+    res.json({ success: true, payments: payments });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/payments/:id/confirm', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var doc = await db.collection('payments').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    var p = doc.data();
+    await db.collection('payments').doc(req.params.id).update({
+      status: 'confirmed',
+      confirmedAt: Date.now(),
+      confirmedBy: 'owner'
+    });
+    if (p.ownerId && (p.payMode === 'premium' || !p.payMode)) {
+      await db.collection('users').doc(p.ownerId).update({
+        plan: 'premium',
+        planUpgradedAt: Date.now()
+      });
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/payments/:id/reject', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    await db.collection('payments').doc(req.params.id).update({ status: 'rejected', rejectedAt: Date.now() });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/store/:id', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    await db.collection('storeTemplates').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
   console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
