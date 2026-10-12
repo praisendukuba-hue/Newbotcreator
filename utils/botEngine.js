@@ -6,7 +6,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const crypto = require('crypto');
 
-const { db, admin } = require('./firebase');
+const { db, admin } = require('../firebase'); // ✅ THIS IS CORRECT
 const engine = require('./utils/botEngine');
 
 process.on('unhandledRejection', (reason) => { console.error('[guard] unhandledRejection:', reason); });
