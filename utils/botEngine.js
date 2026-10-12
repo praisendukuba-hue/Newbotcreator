@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
 // ✅ CRUCIAL: This MUST be ../firebase to go up one folder to the root directory
@@ -21,16 +21,17 @@ function startBot(botData) {
   }
 
   try {
-    const bot = new Telegraf(botData.token);
+    // Initialize bot. (Note: For 700+ bots, ensure your Render plan has enough RAM for polling connections)
+    const bot = new TelegramBot(botData.token, { polling: true });
     botData.users = botData.users || 0;
 
     // --- /start Command ---
-    bot.start(async (ctx) => {
+    bot.onText(/\/start/, async (msg) => {
       try {
-        const userId = String(ctx.from.id);
-        const firstName = ctx.from.first_name || 'User';
+        const chatId = msg.chat.id;
+        const userId = String(msg.from.id);
+        const firstName = msg.from.first_name || 'User';
 
-        // Register or check user in Firestore
         const userRef = db.collection('bots').doc(botData.id).collection('users').doc(userId);
         const userDoc = await userRef.get();
         
@@ -46,57 +47,58 @@ function startBot(botData) {
         } else {
           const uData = userDoc.data();
           if (uData.banned) {
-            return ctx.reply('🚫 You have been banned from using this bot.');
-          }        }
+            return bot.sendMessage(chatId, '🚫 You have been banned from using this bot.');          }
+        }
 
         // ✅ STEALTHY CHANNEL BUTTONS: NO "REQUIRED" TEXT ADDED
-        const buttons = [];
+        const inlineKeyboard = [];
         const allChannels = [...(botData.mustJoin || []), ...(botData.nonMust || [])];
         
         allChannels.forEach(channel => {
           const cleanChannel = channel.replace('@', '').trim();
           // Button text is EXACTLY the channel handle (e.g., "@mychannel")
-          buttons.push(Markup.button.url(channel, `https://t.me/${cleanChannel}`));
+          inlineKeyboard.push([{ text: channel, url: `https://t.me/${cleanChannel}` }]);
         });
 
         if (botData.officialChannel) {
           const offName = botData.officialChannel.replace('https://t.me/', '').replace('@', '');
-          buttons.push(Markup.button.url(`📢 ${offName}`, botData.officialChannel));
+          inlineKeyboard.push([{ text: `📢 ${offName}`, url: botData.officialChannel }]);
         }
-
-        const keyboard = Markup.inlineKeyboard(buttons.map(b => [b]), { columns: 1 });
 
         let welcomeText = `👋 Welcome, <b>${firstName}</b>!\n\n`;
         welcomeText += `💰 Your Balance: <b>0 ${botData.currency || 'TON'}</b>\n\n`;
         welcomeText += `Please join the channels below to get started:`;
 
-        ctx.reply(welcomeText, { parse_mode: 'HTML', ...keyboard });
+        bot.sendMessage(chatId, welcomeText, { 
+          parse_mode: 'HTML', 
+          reply_markup: { inline_keyboard: inlineKeyboard } 
+        });
       } catch (err) {
         console.error(`[Bot ${botData.id}] /start error:`, err.message);
       }
     });
 
     // ✅ HANDLE PHOTO PROOFS (Transforms image to Firestore via server endpoint)
-    bot.on('photo', async (ctx) => {
+    bot.on('photo', async (msg) => {
       try {
-        const userId = String(ctx.from.id);
+        const chatId = msg.chat.id;
+        const userId = String(msg.from.id);
         const botId = botData.id;
         const proofKey = `${botId}_${userId}`;
         const pendingTask = pendingProofs.get(proofKey);
 
         if (!pendingTask) {
-          return ctx.reply('❌ You do not have a pending task. Please start a task first.');
+          return bot.sendMessage(chatId, '❌ You do not have a pending task. Please start a task first.');
         }
 
-        ctx.reply('⏳ Uploading your proof, please wait...');
+        bot.sendMessage(chatId, '⏳ Uploading your proof, please wait...');
 
         // Get the highest resolution photo file_id
-        const photo = ctx.message.photo[ctx.message.photo.length - 1];
-        const fileId = photo.file_id;
-        const caption = ctx.message.caption || '';
-
+        const fileId = msg.photo[msg.photo.length - 1].file_id;
+        const caption = msg.caption || '';
         // Send to your existing server.js endpoint
-        const response = await axios.post(`${API_BASE}/api/bot/${botId}/submit-proof`, {          userId: userId,
+        const response = await axios.post(`${API_BASE}/api/bot/${botId}/submit-proof`, {
+          userId: userId,
           taskName: pendingTask.taskName,
           text: caption,
           photoFileId: fileId,
@@ -105,28 +107,29 @@ function startBot(botData) {
 
         if (response.data.success) {
           pendingProofs.delete(proofKey); // Clear pending state
-          ctx.reply('✅ <b>Proof submitted successfully!</b>\n\nThe bot owner will review it shortly.', { parse_mode: 'HTML' });
+          bot.sendMessage(chatId, '✅ <b>Proof submitted successfully!</b>\n\nThe bot owner will review it shortly.', { parse_mode: 'HTML' });
         } else {
-          ctx.reply('❌ Failed to submit proof. Please try again.');
+          bot.sendMessage(chatId, '❌ Failed to submit proof. Please try again.');
         }
       } catch (error) {
         console.error(`[Bot ${botData.id}] Photo proof error:`, error.message);
-        ctx.reply('❌ An error occurred while uploading. Please try again later.');
+        bot.sendMessage(msg.chat.id, '❌ An error occurred while uploading. Please try again later.');
       }
     });
 
     // ✅ HANDLE TEXT PROOFS & MENU COMMANDS
-    bot.on('text', async (ctx) => {
+    bot.on('text', async (msg) => {
       try {
-        const text = ctx.message.text.trim();
-        const userId = String(ctx.from.id);
+        const chatId = msg.chat.id;
+        const text = msg.text.trim();
+        const userId = String(msg.from.id);
         const botId = botData.id;
         const proofKey = `${botId}_${userId}`;
         const pendingTask = pendingProofs.get(proofKey);
 
         // If user is in proof submission mode and didn't type 'cancel'
         if (pendingTask && text.toLowerCase() !== 'cancel') {
-          ctx.reply('⏳ Submitting your text proof...');
+          bot.sendMessage(chatId, '⏳ Submitting your text proof...');
           
           const response = await axios.post(`${API_BASE}/api/bot/${botId}/submit-proof`, {
             userId: userId,
@@ -138,46 +141,46 @@ function startBot(botData) {
 
           if (response.data.success) {
             pendingProofs.delete(proofKey);
-            ctx.reply('✅ <b>Proof submitted successfully!</b>\n\nThe bot owner will review it shortly.', { parse_mode: 'HTML' });
+            bot.sendMessage(chatId, '✅ <b>Proof submitted successfully!</b>\n\nThe bot owner will review it shortly.', { parse_mode: 'HTML' });
           } else {
-            ctx.reply('❌ Failed to submit proof.');
+            bot.sendMessage(chatId, '❌ Failed to submit proof.');
           }
-          return; // Stop further processing
-        }
+          return; // Stop further processing        }
 
-        // Default Menu Handlers        if (text === '💰 Balance' || text === '/balance') {
+        // Default Menu Handlers
+        if (text === '💰 Balance' || text === '/balance') {
            const userDoc = await db.collection('bots').doc(botId).collection('users').doc(userId).get();
            const bal = userDoc.exists ? userDoc.data().balance : 0;
-           return ctx.reply(`💰 Your Balance: <b>${bal} ${botData.currency || 'TON'}</b>`, { parse_mode: 'HTML' });
+           return bot.sendMessage(chatId, `💰 Your Balance: <b>${bal} ${botData.currency || 'TON'}</b>`, { parse_mode: 'HTML' });
         }
 
         if (text === '📤 Withdraw' || text === '/withdraw') {
-           return ctx.reply('📤 Withdrawal feature: Please use the withdrawal button in the main menu.');
+           return bot.sendMessage(chatId, '📤 Withdrawal feature: Please use the withdrawal button in the main menu.');
         }
 
         if (text === '📋 Tasks' || text === '/tasks') {
           if (botData.tasks && botData.tasks.length > 0) {
-            const task = botData.tasks[0]; // Fetches the first task (expand this loop if you have multiple)
+            const task = botData.tasks[0]; // Fetches the first task
             pendingProofs.set(proofKey, { taskName: task.n, taskReward: task.reward });
             
-            return ctx.reply(
+            return bot.sendMessage(chatId,
               `📌 <b>Task:</b> ${task.n}\n💰 <b>Reward:</b> ${task.reward} ${botData.currency}\n\nPlease complete the task and send a <b>screenshot (photo)</b> or <b>text proof</b> here!`, 
               { 
                 parse_mode: 'HTML',
                 reply_markup: {
-                  inline_keyboard: [[Markup.button.url('🔗 Open Link', task.l)]]
+                  inline_keyboard: [[{ text: '🔗 Open Link', url: task.l }]]
                 }
               }
             );
           } else {
-            return ctx.reply('No tasks available at the moment.');
+            return bot.sendMessage(chatId, 'No tasks available at the moment.');
           }
         }
 
         // Fallback Menu
-        ctx.reply('Use the menu buttons below to navigate.', {
+        bot.sendMessage(chatId, 'Use the menu buttons below to navigate.', {
           reply_markup: {
-            keyboard: [[{ text: '💰 Balance' }], [{ text: '📋 Tasks' }], [{ text: '📤 Withdraw' }]],
+            keyboard: [['💰 Balance'], ['📋 Tasks'], ['📤 Withdraw']],
             resize_keyboard: true
           }
         });
@@ -186,28 +189,19 @@ function startBot(botData) {
       }
     });
 
-    // ✅ LAUNCH BOT SAFELY (dropPendingUpdates prevents 700+ bot crash from old messages)
-    bot.launch({ dropPendingUpdates: true }).catch(err => {
-      console.error(`[Engine] Failed to launch bot ${botData.id}:`, err.message);
-    });
-    
     activeBots[botData.id] = bot;
     console.log(`[Engine] ✅ Bot started: @${botData.username} (ID: ${botData.id})`);
 
-    // Graceful stop handlers    process.once('SIGINT', () => { if(activeBots[botData.id]) activeBots[botData.id].stop('SIGINT'); });
-    process.once('SIGTERM', () => { if(activeBots[botData.id]) activeBots[botData.id].stop('SIGTERM'); });
-
   } catch (error) {
     console.error(`[Engine] Critical failure starting bot ${botData.id}:`, error.message);
-  }
-}
+  }}
 
 // ==========================================
 // 2. STOP A BOT
 // ==========================================
 function stopBot(botId) {
   if (activeBots[botId]) {
-    activeBots[botId].stop('Restart/Stop').catch(() => {});
+    activeBots[botId].stopPolling().catch(() => {});
     delete activeBots[botId];
     console.log(`[Engine] 🛑 Bot stopped: ${botId}`);
     return true;
@@ -243,20 +237,20 @@ async function loadAllBots() {
     snap.forEach((doc) => {
       const botData = Object.assign({ id: doc.id }, doc.data());
       startBot(botData);
-      count++;    });
+      count++;
+    });
     console.log(`[Engine] ✅ Successfully loaded ${count} bots.`);
   } catch (e) {
     console.error('[Engine] Failed to load bots:', e.message);
   }
 }
-
 // ==========================================
 // 5. SEND MESSAGE TO USER (Called by server.js)
 // ==========================================
 async function sendTo(botId, userId, text) {
   if (activeBots[botId]) {
     try {
-      await activeBots[botId].telegram.sendMessage(userId, text, { parse_mode: 'HTML' });
+      await activeBots[botId].sendMessage(userId, text, { parse_mode: 'HTML' });
       return true;
     } catch (e) {
       console.error(`[Engine] Failed to send message to ${userId} in bot ${botId}:`, e.message);
