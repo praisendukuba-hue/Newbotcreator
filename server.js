@@ -290,9 +290,10 @@ app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
 });
 
 // ==========================================
-// NEW: SUBMIT PROOF (Handles Image Uploads from Telegram)
+// SUBMIT PROOF (Bypasses Storage to prevent 500 errors)
 // ==========================================
-app.post('/api/bot/:id/submit-proof', async (req, res) => {  try {
+app.post('/api/bot/:id/submit-proof', async (req, res) => {
+  try {
     const { id: botId } = req.params;
     const { userId, taskName, text, photoFileId, botToken } = req.body;
 
@@ -309,27 +310,9 @@ app.post('/api/bot/:id/submit-proof', async (req, res) => {  try {
         if (!fileRes.data.ok) throw new Error('Failed to get file info from Telegram');
         const filePath = fileRes.data.result.file_path;
 
-        // Step B: Download the file as a buffer
-        const fileDownloadRes = await axios.get(`https://api.telegram.org/file/bot${botToken}/${filePath}`, {
-          responseType: 'arraybuffer',
-          timeout: 15000
-        });
-
-        // Step C: Upload to Firebase Storage
-        const bucket = admin.storage().bucket();
-        const fileName = `proofs/${botId}/${userId}_${Date.now()}.jpg`;
-        const file = bucket.file(fileName);
-        
-        await file.save(fileDownloadRes.data, {
-          metadata: { contentType: 'image/jpeg' }
-        });
-
-        // Step D: Get a secure, long-lived signed URL
-        const [url] = await file.getSignedUrl({
-          action: 'read',
-          expires: '03-01-2500'
-        });
-        imageUrl = url;
+        // Step B: Construct direct Telegram file URL (NO Firebase Storage needed!)
+        // Telegram keeps these files accessible permanently as long as the bot exists.
+        imageUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
 
       } catch (err) {
         console.error('[submit-proof] Error processing photo:', err.message);
@@ -337,6 +320,27 @@ app.post('/api/bot/:id/submit-proof', async (req, res) => {  try {
       }
     }
 
+    // Create the proof record
+    const proofId = `proof_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const newProof = {
+      id: proofId,
+      uid: String(userId),      
+      task: taskName,
+      text: text || '',
+      imageUrl: imageUrl, // Saves the direct Telegram URL to Firestore
+      status: 'pending',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    // Add to the bot's proofs subcollection in Firestore
+    await db.collection('bots').doc(botId).collection('proofs').doc(proofId).set(newProof);
+
+    res.json({ success: true, proofId, message: 'Proof submitted successfully' });
+  } catch (error) {
+    console.error('[submit-proof] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
     // Create the proof record
     const proofId = `proof_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const newProof = {
