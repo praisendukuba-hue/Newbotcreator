@@ -47,7 +47,7 @@ function safeAmount(value) {
   return n;
 }
 
-function makeClientId(prefix, botId, uid) {    return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+function makeClientId(prefix, botId, uid) {      return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
 async function notifyOwner(text) {
@@ -96,7 +96,7 @@ app.post('/api/check-channel-admin', async (req, res) => {
     const m = await axios.get('https://api.telegram.org/bot' + token + '/getChatMember', { params: { chat_id: channel, user_id: me.data.result.id }, timeout: 5000 });
     const st = m.data.result.status;
     res.json({ ok: true, isAdmin: st === 'administrator' || st === 'creator', status: st });
-  } catch (e) {        res.json({ ok: true, isAdmin: false, status: 'error' });
+  } catch (e) {            res.json({ ok: true, isAdmin: false, status: 'error' });
   }
 });
 
@@ -145,9 +145,8 @@ app.get('/api/bot/:id', async (req, res) => {
   try {
     const doc = await db.collection('bots').doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
-    const b = doc.data();        delete b.token; delete b.apiKey;
+    const b = doc.data();            delete b.token; delete b.apiKey;
     
-    // ✅ FIX 1: Normalize fee and botDetect    
     b.withdrawFee = Number(b.withdrawFee || 0);
     b.botDetect = !!b.botDetect;
     
@@ -194,9 +193,8 @@ app.put('/api/bot/:id/settings', async (req, res) => {
     await db.collection('bots').doc(req.params.id).update(u);
     await engine.restartBot(req.params.id);
     
-    // ✅ FIX 2: Echo back what was actually saved    const after = await db.collection('bots').doc(req.params.id).get();
-    const d = after.exists ? after.data() : {};
-    res.json({      
+    const after = await db.collection('bots').doc(req.params.id).get();
+    const d = after.exists ? after.data() : {};    res.json({      
       success: true,
       saved: {
         withdrawFee: Number(d.withdrawFee || 0),
@@ -243,9 +241,9 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
         sent++;
       } catch (e) { failed++; }
       await new Promise(function(r) { setTimeout(r, 35); });
-    }    res.json({ success: true, sent: sent, failed: failed });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    }    
+    res.json({ success: true, sent: sent, failed: failed });
+  } catch (e) {    res.status(500).json({ error: e.message });
   }
 });
 
@@ -294,8 +292,7 @@ app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
 // ==========================================
 app.post('/api/bot/:id/submit-proof', async (req, res) => {
   try {
-    const { id: botId } = req.params;
-    const { userId, taskName, text, photoFileId, botToken } = req.body;
+    const { id: botId } = req.params;    const { userId, taskName, text, photoFileId, botToken } = req.body;
 
     if (!userId || !taskName || !botToken) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -311,7 +308,6 @@ app.post('/api/bot/:id/submit-proof', async (req, res) => {
         const filePath = fileRes.data.result.file_path;
 
         // Step B: Construct direct Telegram file URL (NO Firebase Storage needed!)
-        // Telegram keeps these files accessible permanently as long as the bot exists.
         imageUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
 
       } catch (err) {
@@ -341,32 +337,11 @@ app.post('/api/bot/:id/submit-proof', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-    // Create the proof record
-    const proofId = `proof_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const newProof = {
-      id: proofId,
-      uid: String(userId),      task: taskName,
-      text: text || '',
-      imageUrl: imageUrl,
-      status: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-
-    // Add to the bot's proofs subcollection in Firestore
-    await db.collection('bots').doc(botId).collection('proofs').doc(proofId).set(newProof);
-
-    res.json({ success: true, proofId, message: 'Proof submitted successfully' });
-  } catch (error) {
-    console.error('[submit-proof] Error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
 
 app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
   try {
     const approve = !!req.body.approve;
-    const ref = db.collection('bots').doc(req.params.id).collection('proofs').doc(req.params.pid);
-    const doc = await ref.get();
+    const ref = db.collection('bots').doc(req.params.id).collection('proofs').doc(req.params.pid);    const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Proof already resolved' });
     const p = doc.data();
     if (approve && p.reward) {
@@ -415,8 +390,7 @@ async function payWithPTExchange({ wallet, amount, currency, clientWithdrawalId 
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     timeout: 30000,
     validateStatus: function(status) { return status >= 200 && status < 500; }
-  });
-  
+  });  
   console.log('[PT Exchange] Response:', response.status, JSON.stringify(response.data).slice(0, 300));
   
   if (response.status < 200 || response.status >= 300) {
@@ -443,7 +417,8 @@ async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId
   const url = process.env.XROCKET_PAYOUT_URL || 'https://pay.api.xrocket.exchange/api/v1/payouts';
   const payload = {
     clientPayoutId: clientPayoutId,
-    target: String(telegramUserId),    targetType: 'telegram_user_id',
+    target: String(telegramUserId),    
+    targetType: 'telegram_user_id',
     asset: cur,
     amount: String(amount),
     description: description || 'Bot reward withdrawal'
@@ -464,8 +439,7 @@ async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId
     const message = error.detail || error.message || error.error || ('xRocket returned HTTP ' + response.status);
     const err = new Error(message);
     err.status = response.status;
-    err.providerResponse = response.data;
-    throw err;
+    err.providerResponse = response.data;    throw err;
   }
   
   const data = response.data || {};
@@ -492,7 +466,8 @@ app.post('/api/withdraw', async (req, res) => {
     const telegramUserId = cleanString(body.telegramUserId || body.userId || body.uid);
     
     if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
-    if (!provider) return res.status(400).json({ ok: false, error: 'Payment provider required' });    if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
+    if (!provider) return res.status(400).json({ ok: false, error: 'Payment provider required' });    
+    if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
     
     if (!isAutoPayCoin(currency)) {
       return res.status(400).json({ ok: false, error: 'Currency ' + currency + ' not supported for AutoPay. Only: ' + AUTO_PAY_COINS.join(', ') });
@@ -513,8 +488,7 @@ app.post('/api/withdraw', async (req, res) => {
     
     if (provider === 'AutoPay1') {
       try {
-        const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });
-        return res.json({ ok: true, success: true, provider: 'AutoPay1', status: 'paid', currency, amount, wallet, clientId, result: result.data });
+        const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });        return res.json({ ok: true, success: true, provider: 'AutoPay1', status: 'paid', currency, amount, wallet, clientId, result: result.data });
       } catch (e) {
         console.error('[PT Exchange]', e.message);
         return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', status: 'failed', error: e.message, clientId });
@@ -541,7 +515,8 @@ app.post('/pay/notcoin', async (req, res) => {
     const body = req.body || {};
     const wallet = cleanString(body.wallet || body.address);
     const amount = safeAmount(body.amount);
-    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });    
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
     const clientId = cleanString(body.clientWithdrawalId) || makeClientId('not', body.botId || 'notcoin', body.uid || body.userId);
     const result = await payWithPTExchange({ wallet, amount, currency: 'NOT', clientWithdrawalId: clientId });
     return res.json({ ok: true, success: true, provider: 'AutoPay1', currency: 'NOT', amount, wallet, clientId, result: result.data });
@@ -562,8 +537,7 @@ app.post('/pay/jetton', async (req, res) => {
     if (!currency) return res.status(400).json({ ok: false, error: 'jetton_symbol/currency is required' });
     const clientId = cleanString(body.clientWithdrawalId) || makeClientId('jetton', body.botId || 'bot', body.uid || body.userId);
     const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });
-    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency, amount, wallet, clientId, result: result.data });
-  } catch (e) {
+    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency, amount, wallet, clientId, result: result.data });  } catch (e) {
     console.error('[JETTON]', e.message);
     return res.status(e.status || 502).json({ ok: false, error: e.message });
   }
@@ -590,7 +564,8 @@ app.post('/pay/xrocket', async (req, res) => {
 app.get('/api/bot/:id/withdrawals', async (req, res) => {
   try {
     const snap = await db.collection('bots').doc(req.params.id).collection('withdrawals').limit(500).get();
-    const withdrawals = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });    res.json({ success: true, withdrawals });
+    const withdrawals = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });    
+    res.json({ success: true, withdrawals });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -611,8 +586,7 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
     const itemRef = db.collection('storeTemplates').doc(itemId);
     const item = await itemRef.get();
     if (!item.exists) return { type: type, error: 'item gone' };
-    const d = item.data();
-    if (d.status === 'sold') return { type: type, error: 'already sold' };
+    const d = item.data();    if (d.status === 'sold') return { type: type, error: 'already sold' };
     await itemRef.update({ status: 'sold', soldTo: uid, soldAt: Date.now() });
     await db.collection('users').doc(uid).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(itemId) }, { merge: true });
     await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });
@@ -639,7 +613,8 @@ app.post('/api/process-payment', async (req, res) => {
   try {
     const body = req.body;
     if (!body.txHash || !body.memo) return res.status(400).json({ error: 'Missing fields' });
-    const exist = await db.collection('payments').where('txHash', '==', body.txHash).limit(1).get();    if (!exist.empty) return res.json({ success: true, message: 'already processed' });
+    const exist = await db.collection('payments').where('txHash', '==', body.txHash).limit(1).get();    
+    if (!exist.empty) return res.json({ success: true, message: 'already processed' });
     const result = await applyPayment(body.memo, body.amount, body.currency, body.txHash, body.sender);
     await db.collection('payments').add({ txHash: body.txHash, memo: body.memo, amount: body.amount, currency: body.currency, sender: body.sender, status: 'confirmed', payType: result.type, link: result.link || null, at: Date.now() });
     res.json({ success: true, result: result });
@@ -660,8 +635,7 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
     await ref.update({ status: 'confirmed', payType: result.type, link: result.link || null });
     res.json({ success: true, result: result });
   } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    res.status(500).json({ error: e.message });  }
 });
 
 app.get('/api/user/:uid/profile', async (req, res) => {
@@ -688,7 +662,8 @@ app.post('/api/store/add', async (req, res) => {
   try {
     const key = req.headers['x-admin-key'];
     if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
-    const item = req.body;    if (!item.name || !item.price) return res.status(400).json({ error: 'Name and price required' });
+    const item = req.body;    
+    if (!item.name || !item.price) return res.status(400).json({ error: 'Name and price required' });
     const doc = await db.collection('storeTemplates').add(Object.assign({}, item, { sellerId: 'OWNER', sellerWallet: '', status: 'available', active: true, createdAt: Date.now() }));
     res.json({ success: true, id: doc.id });
   } catch (e) {
@@ -709,8 +684,7 @@ app.post('/api/store/upload', async (req, res) => {
 });
 
 app.post('/api/store/purchase', async (req, res) => {
-  try {
-    const b = req.body;
+  try {    const b = req.body;
     await db.collection('users').doc(b.userId).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId) }, { merge: true });
     res.json({ success: true });
   } catch (e) {
@@ -737,7 +711,8 @@ app.get('/api/admin/chats', async function (req, res) {
   try {
     if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
     const snap = await db.collection('chats').orderBy('lastAt', 'desc').limit(50).get();
-    const chats = [];    snap.forEach(function (d) { chats.push(Object.assign({ id: d.id }, d.data())); });
+    const chats = [];    
+    snap.forEach(function (d) { chats.push(Object.assign({ id: d.id }, d.data())); });
     res.json({ success: true, chats: chats });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -758,8 +733,7 @@ app.post('/api/admin/chat/:uid/send', async function (req, res) {
     const text = req.body.text;
     if (!text) return res.status(400).json({ error: 'Text required' });
     await db.collection('chats').doc(req.params.uid).collection('messages').add({ from: 'admin', text: text, at: Date.now() });
-    await db.collection('chats').doc(req.params.uid).set({ userId: req.params.uid, lastMsg: text, lastAt: Date.now() }, { merge: true });
-    res.json({ success: true });
+    await db.collection('chats').doc(req.params.uid).set({ userId: req.params.uid, lastMsg: text, lastAt: Date.now() }, { merge: true });    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -786,7 +760,8 @@ app.post('/api/admin/payments/:id/confirm', async function (req, res) {
       confirmedBy: 'owner'
     });
     if (p.ownerId && (p.payMode === 'premium' || !p.payMode)) {
-      await db.collection('users').doc(p.ownerId).update({        plan: 'premium',
+      await db.collection('users').doc(p.ownerId).update({        
+        plan: 'premium',
         planUpgradedAt: Date.now()
       });
     }
@@ -807,8 +782,7 @@ app.delete('/api/store/:id', async function (req, res) {
   try {
     await db.collection('storeTemplates').doc(req.params.id).delete();
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+  } catch (e) { res.status(500).json({ error: e.message }); }});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
