@@ -1,774 +1,823 @@
-const TelegramBot = require('node-telegram-bot-api');
+require('dotenv').config();
+
+const express = require('express');
+const cors = require('cors');
 const axios = require('axios');
-const { db } = require('../firebase');
-const { FieldValue } = require('firebase-admin/firestore');
+const cron = require('node-cron');
+const crypto = require('crypto');
 
-const POWERED_BY = 'Crulbotcreatiobot';
-const OFFICIAL_URL = 'https://t.me/DAILYUUPA';
+const { db, admin } = require('./firebase');
+const engine = require('./utils/botEngine');
 
-const activeBots = {};
-const tokenOwner = {};
-const awaiting = {};
-const lastMsg = {};
-const botErrors = {};
+process.on('unhandledRejection', (reason) => { console.error('[guard] unhandledRejection:', reason); });
+process.on('uncaughtException', (err) => { console.error('[guard] uncaughtException:', err); });
 
+const app = express();
+app.use(cors({ origin: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key', 'x-backend-secret'] }));
+app.use(express.json({ limit: '10mb' }));
+
+const SERVER_VERSION = 'v2026.10.08-autopay-fix';
 const AUTO_PAY_COINS = ['TON', 'NOT', 'DOGS', 'USDT', 'USDC', 'BNB'];
 
-function isAutoPayCoin(cur) {
-  return AUTO_PAY_COINS.includes(String(cur || '').toUpperCase());
+function cleanString(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
 }
 
-const esc = (s) =>
-  String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-function normchan(ch) {
-  let s = String(ch || '').trim();
-  if (!s) return '';
-  if (s.startsWith('http')) {
-    const m = s.match(/t\.me\/(?:c\/)?([^\/?]+)/);
-    if (m) s = m[1];
-  }
-  if (/^-?\d/.test(s)) return s;
-  return s.startsWith('@') ? s : '@' + s;
+function normalizeCurrency(currency) {
+  return cleanString(currency).toUpperCase();
 }
 
-const chanUrl = (ch) => {
-  const s = normchan(ch);
-  if (/^-?\d/.test(s)) return 'https://t.me/c/' + s;
-  return 'https://t.me/' + s.replace('@', '');
-};
-
-function getPTConfig(cur) {
-  const c = String(cur || '').trim().toLowerCase();
-  const tonGateway = 'https://ptexchange-api.vercel.app';
-  const bscGateway = 'https://pt-kappa-ten.vercel.app';
-  
-  if (c === 'ton') return { url: tonGateway + '/pay/ton', type: 'ton' };
-  if (c === 'not') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'NOT' };  if (c === 'usdt') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'USDT' };
-  if (c === 'usdc') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'USDC' };
-  if (c === 'dogs') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'DOGS' };
-  if (c === 'bnb') return { url: bscGateway + '/pay/bnb', type: 'bnb' };
-  return null;
+function isAutoPayCoin(currency) {
+  return AUTO_PAY_COINS.includes(normalizeCurrency(currency));
 }
 
-function xrAsset(cur) {
-  return String(cur || '').trim().toUpperCase();
+function normalizeProvider(provider) {
+  const p = cleanString(provider).toLowerCase();
+  if (['autopay1', 'ptexchange', 'pt', 'auto pay 1'].includes(p)) return 'AutoPay1';
+  if (['autopay2', 'xrocket', 'xrocket pay', 'auto pay 2'].includes(p)) return 'AutoPay2';
+  if (['manual', 'manual payment'].includes(p)) return 'Manual';
+  return p;
 }
 
-function normalizePayMethod(value) {
-  const s = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-  if (['autopay1', 'pt', 'ptexchange', 'btexchange', 'bt'].includes(s)) return 'AutoPay1';
-  if (['autopay2', 'xrocket', 'acerocket', 'ace'].includes(s)) return 'AutoPay2';
-  if (['manual', 'manualpayment'].includes(s)) return 'Manual';
-  return value || 'Manual';
-}
-
-function cleanAmount(value) {
+function safeAmount(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   if (n <= 0) return null;
-  return n.toFixed(12).replace(/\.?0+$/, '');
+  return n;
 }
 
-function providerError(error, fallback) {
+function makeClientId(prefix, botId, uid) {      return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+}
+
+async function notifyOwner(text) {
+  if (!process.env.ADMIN_TELEGRAM_BOT_TOKEN || !process.env.ADMIN_CHAT_ID) return;
   try {
-    if (error && error.response) {
-      const status = error.response.status;
-      const data = error.response.data;
-      if (typeof data === 'string') return 'HTTP ' + status + ': ' + data.slice(0, 300);
-      if (data) {
-        const detail = data.detail || data.message || data.error || data.title || data.type;
-        if (detail) return 'HTTP ' + status + ': ' + String(detail).slice(0, 300);
-        return 'HTTP ' + status + ': ' + JSON.stringify(data).slice(0, 300);
-      }
-      return 'HTTP ' + status;
-    }
-    if (error && error.code) return String(error.code) + ': ' + String(error.message || '').slice(0, 250);
-    if (error && error.message) return String(error.message).slice(0, 300);
+    await axios.post('https://api.telegram.org/bot' + process.env.ADMIN_TELEGRAM_BOT_TOKEN + '/sendMessage',
+      { chat_id: process.env.ADMIN_CHAT_ID, text: text, parse_mode: 'HTML' }, { timeout: 5000 });
   } catch (e) {}
-  return fallback || 'Payment provider error';
 }
 
-function setA(key, type, extra) {
-  awaiting[key] = Object.assign({ type: type, exp: Date.now() + 300000 }, extra || {});
-}
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', version: SERVER_VERSION, botsOnline: Object.keys(engine.activeBots || {}).length });
+});
 
-function getA(key) {  const a = awaiting[key];
-  if (!a) return null;
-  if (Date.now() > a.exp) { delete awaiting[key]; return null; }
-  return a;
-}
+app.get('/ping', (req, res) => {
+  res.json({ pong: true, version: SERVER_VERSION, time: new Date().toISOString() });
+});
 
-async function getUser(botId, uid) {
-  const ref = db.collection('bots').doc(botId).collection('users').doc(String(uid));
-  const snap = await ref.get();
-  if (!snap.exists) {
-    const fresh = { balance: 0, wallet: 'Not Set', refer: null, refs: 0, captchaPassed: false, banned: false, joinedAt: Date.now() };
-    await ref.set(fresh);
-    return { ref, data: fresh, isNew: true };
-  }
-  return { ref, data: snap.data(), isNew: false };
-}
-
-function sendTo(botId, uid, text) {
-  const info = activeBots[botId];
-  if (!info) return Promise.resolve(false);
-  return info.bot.sendMessage(uid, text, { parse_mode: 'HTML' }).then(() => true).catch(() => false);
-}
-
-function isAuthError(err) {
-  const msg = String((err && (err.message || err.code || err.description)) || err).toLowerCase();
-  return /401|403|unauthorized|bot was blocked|token invalid|deleted/i.test(msg);
-}
-
-// Sanitize description for xRocket (remove special chars, limit length)
-function sanitizeDescription(text) {
-  if (!text) return '';
-  // Remove special characters, keep only alphanumeric and basic punctuation
-  const cleaned = String(text).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
-  // Limit to 50 characters (xRocket requirement)
-  return cleaned.substring(0, 50);
-}
-
-async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment }) {
-  if (!apiKey) throw new Error('AutoPay1 API key is missing.');
-  
-  const ptConfig = getPTConfig(currency);
-  if (!ptConfig) throw new Error('Currency ' + currency + ' is not supported by PT Exchange');
-
-  const payload = { api_key: apiKey, to_address: wallet, amount: parseFloat(amount) };
-  
-  if (ptConfig.type === 'ton') {
-    payload.comment = comment || 'Clur Bot withdrawal';
-  } else if (ptConfig.type === 'jetton') {
-    payload.jetton_symbol = ptConfig.symbol;
-    payload.comment = comment || 'Clur Bot withdrawal';  } else if (ptConfig.type === 'bnb') {
-    payload.comment = comment || 'Clur Bot withdrawal';
-  }
-
-  console.log(`[engine:${botId}] AutoPay1 request: ${currency} → ${wallet} (${amount})`);
-  console.log(`[engine:${botId}] PT URL: ${ptConfig.url}`);
-  console.log(`[engine:${botId}] PT payload:`, JSON.stringify(payload));
-
-  const response = await axios.post(ptConfig.url, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 30000,
-    validateStatus: () => true
+app.get('/api/payment-health', (req, res) => {
+  res.json({
+    ok: true,
+    version: SERVER_VERSION,
+    supportedCoins: AUTO_PAY_COINS,
+    providers: { AutoPay1: 'PT Exchange', AutoPay2: 'xRocket', Manual: 'manual' }
   });
+});
 
-  console.log(`[engine:${botId}] AutoPay1 response status=${response.status} body=${JSON.stringify(response.data).slice(0, 500)}`);
-
-  const d = response.data || {};
-
-  if (response.status < 200 || response.status >= 300) {
-    const detail = d.detail || d.message || d.error || d.title || d.type || ('HTTP ' + response.status);
-    throw new Error(String(detail).slice(0, 300));
+app.post('/api/verify-token', async (req, res) => {
+  try {
+    const token = req.body.token;
+    if (!token) return res.status(400).json({ ok: false, error: 'Token required' });
+    const r = await axios.get('https://api.telegram.org/bot' + token + '/getMe', { timeout: 5000 });
+    if (r.data.ok) return res.json({ ok: true, username: r.data.result.username, firstName: r.data.result.first_name, id: r.data.result.id });
+    res.status(400).json({ ok: false, error: 'Invalid token' });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: 'Failed to verify' });
   }
+});
 
-  const txHash = d.tx_hash || d.txHash || d.hash || d.transaction || d.transactionHash || d.tx || d.id || '';
-  const success = d.success === true || d.ok === true || d.status === 'success' || d.status === 'completed' || d.status === 'paid' || !!txHash;
-
-  if (!success) {
-    throw new Error(String(d.message || d.error || d.detail || 'PT Exchange rejected the withdrawal').slice(0, 300));
+app.post('/api/check-channel-admin', async (req, res) => {
+  try {
+    const token = req.body.token;
+    const channel = req.body.channel;
+    if (!token || !channel) return res.json({ ok: true, isAdmin: false, status: 'missing' });
+    const me = await axios.get('https://api.telegram.org/bot' + token + '/getMe', { timeout: 5000 });
+    const m = await axios.get('https://api.telegram.org/bot' + token + '/getChatMember', { params: { chat_id: channel, user_id: me.data.result.id }, timeout: 5000 });
+    const st = m.data.result.status;
+    res.json({ ok: true, isAdmin: st === 'administrator' || st === 'creator', status: st });
+  } catch (e) {            res.json({ ok: true, isAdmin: false, status: 'error' });
   }
+});
 
-  return { success: true, txHash: txHash, data: d };
-}
-
-async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, description }) {
-  if (!apiKey) throw new Error('AutoPay2 API key is missing.');
-
-  const asset = xrAsset(currency);
-  const clientPayoutId = 'CLUR-' + botId + '-' + uid + '-' + Date.now();
-
-  // xRocket payload - description is OPTIONAL and must be sanitized
-  const payload = {
-    clientPayoutId,
-    target: String(uid),
-    targetType: 'telegram_user_id',
-    asset,
-    amount: String(amount)
-  };
-
-  // Only add description if it's valid (sanitized and not empty)
-  const sanitizedDesc = sanitizeDescription(description);  if (sanitizedDesc) {
-    payload.description = sanitizedDesc;
+app.post('/api/create-bot', async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data.token || !data.name || !data.ownerId) return res.status(400).json({ error: 'Missing fields' });
+    const v = await axios.get('https://api.telegram.org/bot' + data.token + '/getMe', { timeout: 5000 });
+    if (!v.data.ok) return res.status(400).json({ error: 'Token invalid' });
+    
+    const mj = (data.mustJoin || []).slice(0, 10);
+    const nm = (data.nonMust || []).slice(0, Math.max(0, 10 - mj.length));
+    const parsedTasks = (data.tasks || []).map(function(t) { return { n: t.n, l: t.l, reward: Number(t.reward || 0) }; });
+    
+    const botData = {
+      ownerId: data.ownerId, coAdmins: [], type: data.type || 'bot',
+      name: data.name, username: v.data.result.username, token: data.token,
+      currency: data.currency, payMethod: data.payMethod, apiKey: data.apiKey || '',
+      payoutChannel: data.payoutChannel || '', minW: parseFloat(data.minW) || 0.01,
+      maxW: parseFloat(data.maxW) || 100, refBonus: parseFloat(data.refBonus) || 0.01,
+      withdrawFee: parseFloat(data.withdrawFee) || 0, mustJoin: mj, nonMust: nm,
+      tasks: parsedTasks, botDetect: data.botDetect === true,
+      officialChannel: 'https://t.me/DAILYUUPA', users: 0, status: 'active',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    };
+    const ref = await db.collection('bots').add(botData);
+    engine.startBot(Object.assign({ id: ref.id }, botData));
+    res.json({ success: true, botId: ref.id, username: v.data.result.username });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
+});
 
-  const url = 'https://pay.api.xrocket.exchange/api/v1/payouts';
-
-  console.log(`[engine:${botId}] AutoPay2 request: ${asset} → Telegram user ${uid} (${amount})`);
-  console.log(`[engine:${botId}] xRocket URL: ${url}`);
-  console.log(`[engine:${botId}] xRocket payload:`, JSON.stringify(payload));
-
-  const response = await axios.post(url, payload, {
-    headers: {
-      'Accept': 'application/json',
-      'Authorization': 'Bearer ' + apiKey,
-      'Content-Type': 'application/json'
-    },
-    timeout: 30000,
-    validateStatus: () => true
-  });
-
-  console.log(`[engine:${botId}] AutoPay2 response status=${response.status} body=${JSON.stringify(response.data).slice(0, 500)}`);
-
-  const d = response.data || {};
-
-  if (response.status < 200 || response.status >= 300) {
-    const detail = d.detail || d.message || d.error || d.title || d.type || ('HTTP ' + response.status);
-    throw new Error(String(detail).slice(0, 300));
+app.get('/api/user/:uid/bots', async (req, res) => {
+  try {
+    const snap = await db.collection('bots').where('ownerId', '==', req.params.uid).get();
+    const bots = [];
+    snap.forEach(function(d) { bots.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, bots: bots });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
+});
 
-  const status = String(d.status || '').toLowerCase();
-  const payoutId = d.payoutId || d.id || d.tx_hash || d.hash || '';
-
-  if (status === 'finished') {
-    return { success: true, paid: true, status: 'finished', payoutId, clientPayoutId, data: d };
-  }
-
-  if (status === 'pending') {
-    return { success: true, paid: false, status: 'pending', payoutId, clientPayoutId, data: d };
-  }
-
-  if (status === 'failed') {
-    throw new Error(String(d.detail || d.message || d.error || 'xRocket rejected the payout').slice(0, 300));
-  }
-
-  throw new Error('xRocket returned an unknown payout status: ' + (d.status || 'missing status'));
-}
-
-function startBot(cfgIn) {
-  const cfg = Object.assign({}, cfgIn);
-  const botId = cfg.id;  
-  try { if (activeBots[botId]) stopBot(botId); } catch (e) {}
-  const prev = tokenOwner[cfg.token];
-  if (prev && prev !== botId) stopBot(prev);
-
-  const bot = new TelegramBot(cfg.token, { polling: true });
-  activeBots[botId] = { bot, cfg };
-  tokenOwner[cfg.token] = botId;
-  botErrors[botId] = 0;
-
-  let currency = cfg.currency || '';
-  let pay = normalizePayMethod(cfg.payMethod || 'Manual');
-  let minW = Number(cfg.minW || 0);
-  let maxW = Number(cfg.maxW || 0);
-  let refB = Number(cfg.refBonus || 0);
-  let payout = cfg.payoutChannel || '';
-  let apiKey = cfg.apiKey || '';
-  let mustJoin = (cfg.mustJoin || []).slice(0, 10);
-  let nonMust = (cfg.nonMust || []).slice(0, 10);
-  let tasks = cfg.tasks || [];
-  let botDetect = !!cfg.botDetect;
-  let name = cfg.name || 'Rewards Bot';
-  let fee = Number(cfg.withdrawFee || 0);
-
-  console.log(`[engine:${botId}] ✅ STARTED (${name}) · ${currency} · ${pay} · detect:${botDetect} · fee:${fee}`);
-
-  async function deactivate(reason) {
-    console.log(`[engine:${botId}] ❌ DEACTIVATING: ${reason}`);
-    stopBot(botId);
+app.get('/api/bot/:id', async (req, res) => {
+  try {
+    const doc = await db.collection('bots').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    const b = doc.data();            delete b.token; delete b.apiKey;
+    
+    // ✅ FIX 1: Normalize fee and botDetect    
+    b.withdrawFee = Number(b.withdrawFee || 0);
+    b.botDetect = !!b.botDetect;
+    
+    let userList = [], withdrawals = [], proofs = [];
     try {
-      await db.collection('bots').doc(botId).update({ status: 'deactivated', deactivationReason: reason, deactivatedAt: Date.now() });
-    } catch (e) {
-      console.log(`[engine:${botId}] deactivate DB write failed: ${e.message}`);
-    }
+      const u = await db.collection('bots').doc(req.params.id).collection('users').limit(300).get();
+      userList = u.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+      const w = await db.collection('bots').doc(req.params.id).collection('withdrawals').limit(100).get();
+      withdrawals = w.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+      const p = await db.collection('bots').doc(req.params.id).collection('proofs').where('status', '==', 'pending').limit(100).get();
+      proofs = p.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+    } catch (e) {}
+    const created = b.createdAt ? new Date(b.createdAt).getTime() : Date.now();
+    b.hours = Math.max(0, Math.floor((Date.now() - created) / 3600000));
+    b.online = !!engine.activeBots[req.params.id];
+    b.userList = userList; b.withdrawals = withdrawals; b.proofs = proofs;
+    res.json({ success: true, bot: Object.assign({ id: doc.id }, b) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
+});
 
-  (async function verifyStartup() {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+app.put('/api/bot/:id/settings', async (req, res) => {
+  try {
+    const body = req.body;
+    const u = { updatedAt: new Date().toISOString() };
+    if (body.minW !== undefined) u.minW = parseFloat(body.minW);
+    if (body.maxW !== undefined) u.maxW = parseFloat(body.maxW);
+    if (body.refBonus !== undefined) u.refBonus = parseFloat(body.refBonus);
+    if (body.withdrawFee !== undefined) u.withdrawFee = parseFloat(body.withdrawFee) || 0;
+    if (body.mustJoin !== undefined) {
+      // ✅ Keeps channel names exactly as provided, no "required" text added
+      u.mustJoin = typeof body.mustJoin === 'string' ? body.mustJoin.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.mustJoin;
+    }
+    if (body.nonMust !== undefined) {
+      u.nonMust = typeof body.nonMust === 'string' ? body.nonMust.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.nonMust;
+    }
+    if (body.tasks !== undefined) {
+      u.tasks = (body.tasks || []).map(function(t) { return { n: t.n, l: t.l, reward: Number(t.reward || 0) }; });
+    }
+    if (body.botDetect !== undefined) u.botDetect = body.botDetect === true;
+    if (body.coAdmins !== undefined) {
+      u.coAdmins = typeof body.coAdmins === 'string' ? body.coAdmins.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : body.coAdmins;
+    }
+    await db.collection('bots').doc(req.params.id).update(u);
+    await engine.restartBot(req.params.id);
+        // ✅ FIX 2: Echo back what was actually saved    
+    const after = await db.collection('bots').doc(req.params.id).get();
+    const d = after.exists ? after.data() : {};
+    res.json({      
+      success: true,
+      saved: {
+        withdrawFee: Number(d.withdrawFee || 0),
+        botDetect: !!d.botDetect,
+        minW: d.minW,
+        maxW: d.maxW,
+        refBonus: d.refBonus,
+        mustJoin: d.mustJoin || [], // Returns raw channel names
+        nonMust: d.nonMust || []
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/bot/:id', async (req, res) => {  
+  try {
+    engine.stopBot(req.params.id);
+    const subs = ['users', 'withdrawals', 'proofs'];
+    for (const sub of subs) {
+      const snap = await db.collection('bots').doc(req.params.id).collection(sub).limit(500).get();
+      const batch = db.batch();
+      snap.docs.forEach(function(d) { batch.delete(d.ref); });
+      await batch.commit();
+    }
+    await db.collection('bots').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/bot/:id/broadcast', async (req, res) => {
+  try {
+    const message = req.body.message;
+    if (!message) return res.status(400).json({ error: 'Message required' });
+    const doc = await db.collection('bots').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    const token = doc.data().token;
+    const u = await db.collection('bots').doc(req.params.id).collection('users').limit(5000).get();
+    let sent = 0, failed = 0;
+    for (const x of u.docs) {
       try {
-        await bot.getMe();
-        return;
+        await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
+        sent++;      } catch (e) { failed++; }
+      await new Promise(function(r) { setTimeout(r, 35); });
+    }    
+    res.json({ success: true, sent: sent, failed: failed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/admin/broadcast', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const message = req.body.message;
+    if (!message) return res.status(400).json({ error: 'Message required' });
+    const bots = await db.collection('bots').where('status', '==', 'active').get();
+    let sent = 0, failed = 0;
+    for (const b of bots.docs) {
+      const token = b.data().token;
+      const u = await db.collection('bots').doc(b.id).collection('users').limit(5000).get();
+      for (const x of u.docs) {        
+        try {
+          await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
+          sent++;
+        } catch (e) { failed++; }
+        await new Promise(function(r) { setTimeout(r, 35); });
+      }
+    }
+    res.json({ success: true, sent: sent, failed: failed, bots: bots.size });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
+  try {
+    const body = req.body;
+    const ref = db.collection('bots').doc(req.params.id).collection('users').doc(String(req.params.uid));
+    const u = {};
+    if (body.banned !== undefined) u.banned = body.banned === true;
+    if (body.addBalance !== undefined) u.balance = admin.firestore.FieldValue.increment(parseFloat(body.addBalance));
+    if (body.setBalance !== undefined) u.balance = parseFloat(body.setBalance);
+    await ref.set(u, { merge: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================// ✅ NEW: SUBMIT PROOF (Handles Image Uploads from Telegram)
+// ==========================================
+app.post('/api/bot/:id/submit-proof', async (req, res) => {  
+  try {
+    const { id: botId } = req.params;
+    const { userId, taskName, text, photoFileId, botToken } = req.body;
+
+    if (!userId || !taskName || !botToken) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
+    }
+
+    let imageUrl = null;
+
+    if (photoFileId) {
+      try {
+        // Step A: Get file path from Telegram
+        const fileRes = await axios.get(`https://api.telegram.org/bot${botToken}/getFile?file_id=${photoFileId}`, { timeout: 10000 });
+        if (!fileRes.data.ok) throw new Error('Failed to get file info from Telegram');
+        const filePath = fileRes.data.result.file_path;
+
+        // Step B: Download the file as a buffer
+        const fileDownloadRes = await axios.get(`https://api.telegram.org/file/bot${botToken}/${filePath}`, {
+          responseType: 'arraybuffer',
+          timeout: 15000
+        });
+
+        // Step C: Upload to Firebase Storage
+        const bucket = admin.storage().bucket();
+        const fileName = `proofs/${botId}/${userId}_${Date.now()}.jpg`;
+        const file = bucket.file(fileName);
+        
+        await file.save(fileDownloadRes.data, {
+          metadata: { contentType: 'image/jpeg' }
+        });
+
+        // Step D: Get a secure, long-lived signed URL
+        const [url] = await file.getSignedUrl({
+          action: 'read',
+          expires: '03-01-2500'
+        });
+        imageUrl = url;
+
       } catch (err) {
-        if (isAuthError(err)) return deactivate('Token invalid or deleted from BotFather');
-        console.log(`[engine:${botId}] getMe attempt ${attempt}/3 failed (network): ${String(err.message || err).slice(0, 100)}`);
-        await new Promise(r => setTimeout(r, 3000 * attempt));
+        console.error('[submit-proof] Error processing photo:', err.message);
+        return res.status(500).json({ success: false, error: 'Failed to process image from Telegram' });
       }
     }
-    console.log(`[engine:${botId}] ⚠️ Could not verify token after 3 attempts.`);
-  })();
-  bot.on('polling_error', (err) => {
-    const msg = String((err && err.message) || err);
-    botErrors[botId] = (botErrors[botId] || 0) + 1;
-    if (isAuthError(err)) {
-      deactivate('Auth error: ' + msg.slice(0, 100));
-    } else if (/409/.test(msg)) {
-      console.log(`[engine:${botId}] ⚠️ 409 conflict - another poller is running`);
-    } else if (/ETELEGRAM|network|timeout|ECONNRESET|socket hang/i.test(msg)) {
-      if (botErrors[botId] % 10 === 1) {
-        console.log(`[engine:${botId}] network blip (${botErrors[botId]} total): ${msg.slice(0, 100)}`);
-      }
+
+    // Create the proof record
+    const proofId = `proof_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;    const newProof = {
+      id: proofId,
+      uid: String(userId),      
+      task: taskName,
+      text: text || '',
+      imageUrl: imageUrl,
+      status: 'pending',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    // Add to the bot's proofs subcollection in Firestore
+    await db.collection('bots').doc(botId).collection('proofs').doc(proofId).set(newProof);
+
+    res.json({ success: true, proofId, message: 'Proof submitted successfully' });
+  } catch (error) {
+    console.error('[submit-proof] Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
+  try {
+    const approve = !!req.body.approve;
+    const ref = db.collection('bots').doc(req.params.id).collection('proofs').doc(req.params.pid);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Proof already resolved' });
+    const p = doc.data();
+    if (approve && p.reward) {
+      try {        
+        await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
+          .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
+      } catch (e) {}
+      await engine.sendTo(req.params.id, p.uid, '✅ <b>Your task proof was APPROVED!</b>\n\n🎁 You earned <b>' + p.reward + '</b>!');
     } else {
-      console.log(`[engine:${botId}] polling error: ${msg.slice(0, 150)}`);
+      await engine.sendTo(req.params.id, p.uid, approve ? '✅ <b>Your task proof was APPROVED!</b>' : '❌ <b>Your task proof was declined.</b>');
     }
+    await ref.delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PT Exchange Payment
+async function payWithPTExchange({ wallet, amount, currency, clientWithdrawalId }) {
+  const apiKey = process.env.PT_API_KEY || process.env.PT_EXCHANGE_API_KEY;
+  if (!apiKey) throw new Error('PT_API_KEY is not configured');
+  
+  const cur = normalizeCurrency(currency);
+  if (!isAutoPayCoin(cur)) throw new Error('Currency ' + cur + ' not supported. Only: ' + AUTO_PAY_COINS.join(', '));  
+  const tonGateway = 'https://ptexchange-api.vercel.app';
+  const bscGateway = 'https://pt-kappa-ten.vercel.app';  
+  let url, payload;
+  
+  if (cur === 'TON') {
+    url = tonGateway + '/pay/ton';
+    payload = { api_key: apiKey, to_address: wallet, amount: amount, comment: clientWithdrawalId || 'Clur Bot' };
+  } else if (cur === 'BNB') {
+    url = bscGateway + '/pay/bnb';
+    payload = { api_key: apiKey, to_address: wallet, amount: amount, comment: clientWithdrawalId || 'Clur Bot' };
+  } else {
+    url = tonGateway + '/pay/jetton';
+    payload = { api_key: apiKey, to_address: wallet, jetton_symbol: cur, amount: amount, comment: clientWithdrawalId || 'Clur Bot' };
+  }
+  
+  console.log('[PT Exchange] Sending:', cur, 'to', wallet, 'amount:', amount);
+  console.log('[PT Exchange] URL:', url);
+  
+  const response = await axios.post(url, payload, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000,
+    validateStatus: function(status) { return status >= 200 && status < 500; }
   });
+  
+  console.log('[PT Exchange] Response:', response.status, JSON.stringify(response.data).slice(0, 300));
+  
+  if (response.status < 200 || response.status >= 300) {
+    const error = response.data || {};    
+    const message = error.error || error.message || error.detail || ('PT Exchange returned HTTP ' + response.status);
+    const err = new Error(message);
+    err.status = response.status;
+    err.providerResponse = response.data;
+    throw err;
+  }
+  
+  return { provider: 'pt_exchange', status: 'success', data: response.data };
+}
 
-  bot.on('error', (err) => {
-    const msg = String(err).slice(0, 100);
-    if (isAuthError(err)) deactivate('Bot error: ' + msg);
-    else console.log(`[engine:${botId}] error: ${msg}`);
+// xRocket Payment
+async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId, description }) {  
+  const token = process.env.XROCKET_API_KEY || process.env.XROCKET_TOKEN;
+  if (!token) throw new Error('XROCKET_API_KEY is not configured');
+  if (!telegramUserId) throw new Error('Telegram user ID is required for xRocket');
+  
+  const cur = normalizeCurrency(currency);
+  if (!isAutoPayCoin(cur)) throw new Error('Currency ' + cur + ' not supported. Only: ' + AUTO_PAY_COINS.join(', '));
+  
+  const url = process.env.XROCKET_PAYOUT_URL || 'https://pay.api.xrocket.exchange/api/v1/payouts';
+  const payload = {    clientPayoutId: clientPayoutId,
+    target: String(telegramUserId),    
+    targetType: 'telegram_user_id',
+    asset: cur,
+    amount: String(amount),
+    description: description || 'Bot reward withdrawal'
+  };
+  
+  console.log('[xRocket] Sending:', cur, 'to user', telegramUserId, 'amount:', amount);
+  
+  const response = await axios.post(url, payload, {
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', Accept: 'application/json' },
+    timeout: 30000,
+    validateStatus: function(status) { return status >= 200 && status < 500; }
   });
-
-  const safe = (fn) => async function () {
-    try { await fn.apply(null, arguments); }
-    catch (e) {
-      console.error(`[engine:${botId}] handler crashed:`, e.message);
-      console.error(e.stack);
-    }
-  };
-
-  async function refreshCfg() {
-    try {
-      const snap = await db.collection('bots').doc(botId).get();
-      if (!snap.exists) { deactivate('Bot deleted from DB'); return false; }
-      const d = snap.data();
-      if (d.status !== 'active') { deactivate('Status changed to: ' + d.status); return false; }
-      currency = d.currency || currency;
-      pay = normalizePayMethod(d.payMethod || pay);
-      minW = Number(d.minW != null ? d.minW : minW);
-      maxW = Number(d.maxW != null ? d.maxW : maxW);
-      refB = Number(d.refBonus != null ? d.refBonus : refB);
-      payout = d.payoutChannel || payout;
-      apiKey = d.apiKey || apiKey;
-      mustJoin = (d.mustJoin || []).slice(0, 10);
-      nonMust = (d.nonMust || []).slice(0, 10);
-      tasks = d.tasks || tasks;
-      botDetect = d.botDetect === true;
-      name = d.name || name;
-      fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);
-      return true;    } catch (e) {
-      console.log(`[engine:${botId}] refreshCfg error: ${e.message}`);
-      return true;
-    }
+  
+  console.log('[xRocket] Response:', response.status, JSON.stringify(response.data).slice(0, 300));
+  
+  if (response.status < 200 || response.status >= 300) {
+    const error = response.data || {};
+    const message = error.detail || error.message || error.error || ('xRocket returned HTTP ' + response.status);
+    const err = new Error(message);
+    err.status = response.status;
+    err.providerResponse = response.data;
+    throw err;
   }
-
-  const menuKeyboard = () => {
-    const keyboard = [
-      [{ text: '🏦 Balance' }, { text: '🎁 Invite' }],
-      [{ text: '📋 Tasks' }, { text: '💸 Withdraw' }]
-    ];
-    if (pay === 'Manual' || pay === 'AutoPay1') keyboard.push([{ text: '👛 Wallet' }]);
-    return { reply_markup: { keyboard, resize_keyboard: true }, parse_mode: 'HTML' };
-  };
-
-  async function notifyPayout(text, opts) {
-    if (!payout) return;
-    try { await bot.sendMessage(normchan(payout), text, opts || { parse_mode: 'HTML' }); }
-    catch (e) { console.log(`[engine:${botId}] notifyPayout failed: ${e.message.slice(0, 80)}`); }
+  
+  const data = response.data || {};
+  const status = cleanString(data.status).toLowerCase();
+  if (status === 'failed') {
+    const err = new Error('xRocket payout failed');
+    err.status = response.status;
+    err.providerResponse = data;
+    throw err;
   }
+  
+  return { provider: 'xrocket', status: status || 'success', data: data };
+}
 
-  async function logWithdraw(uid, amount, status, wallet, txHash, feeAmount, receivedAmount, extra) {
-    try {
-      await db.collection('bots').doc(botId).collection('withdrawals').add(
-        Object.assign({ uid: String(uid), amount, fee: feeAmount || 0, received: receivedAmount || amount, currency, status, wallet: wallet || '-', txHash: txHash || null, at: Date.now() }, extra || {})
-      );
-    } catch (e) { console.log(`[engine:${botId}] logWithdraw failed: ${e.message}`); }
+app.post('/api/withdraw', async (req, res) => {  
+  try {
+    const body = req.body || {};
+    const botId = cleanString(body.botId || body.bot || body.bot_id);
+    const uid = cleanString(body.uid || body.userId || body.telegramUserId);
+    const amount = safeAmount(body.amount);
+    const currency = normalizeCurrency(body.currency || body.asset || 'NOT');
+    const provider = normalizeProvider(body.provider || body.payMethod || body.paymentMethod);
+    const wallet = cleanString(body.wallet || body.address);
+    const telegramUserId = cleanString(body.telegramUserId || body.userId || body.uid);
+        if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (!provider) return res.status(400).json({ ok: false, error: 'Payment provider required' });    
+    if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
+    
+    if (!isAutoPayCoin(currency)) {
+      return res.status(400).json({ ok: false, error: 'Currency ' + currency + ' not supported for AutoPay. Only: ' + AUTO_PAY_COINS.join(', ') });
+    }
+    
+    if (provider === 'AutoPay1' && !wallet) {
+      return res.status(400).json({ ok: false, error: 'Wallet address required for PT Exchange' });
+    }
+    if (provider === 'AutoPay2' && !telegramUserId) {
+      return res.status(400).json({ ok: false, error: 'Telegram user ID required for xRocket' });
+    }
+    
+    const clientId = cleanString(body.clientWithdrawalId || body.clientPayoutId) || makeClientId('withdraw', botId, uid);
+    
+    if (provider === 'Manual') {
+      return res.json({ ok: true, success: true, provider: 'Manual', status: 'pending', clientId: clientId, message: 'Withdrawal submitted for manual processing' });
+    }
+    
+    if (provider === 'AutoPay1') {
+      try {
+        const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });
+        return res.json({ ok: true, success: true, provider: 'AutoPay1', status: 'paid', currency, amount, wallet, clientId, result: result.data });
+      } catch (e) {
+        console.error('[PT Exchange]', e.message);
+        return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', status: 'failed', error: e.message, clientId });
+      }
+    }    
+    if (provider === 'AutoPay2') {
+      try {
+        const result = await payWithXRocket({ telegramUserId, amount, currency, clientPayoutId: clientId, description: body.description || 'Bot reward withdrawal' });
+        return res.json({ ok: true, success: true, provider: 'AutoPay2', status: result.status, currency, amount, telegramUserId, clientId, result: result.data });
+      } catch (e) {
+        console.error('[xRocket]', e.message);
+        return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay2', status: 'failed', error: e.message, clientId });
+      }
+    }    
+    return res.status(400).json({ ok: false, error: 'Unsupported payment provider: ' + provider });
+  } catch (e) {
+    console.error('[withdraw] fatal:', e);
+    return res.status(500).json({ ok: false, error: e.message });
   }
+});
 
-  async function getUsername(uid) {
-    try { const c = await bot.getChat(uid); return c.username ? '@' + c.username : (c.first_name || ''); }
-    catch (e) { return ''; }
+app.post('/pay/notcoin', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const wallet = cleanString(body.wallet || body.address);    const amount = safeAmount(body.amount);
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });    
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    const clientId = cleanString(body.clientWithdrawalId) || makeClientId('not', body.botId || 'notcoin', body.uid || body.userId);
+    const result = await payWithPTExchange({ wallet, amount, currency: 'NOT', clientWithdrawalId: clientId });
+    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency: 'NOT', amount, wallet, clientId, result: result.data });
+  } catch (e) {
+    console.error('[NOTCOIN]', e.message);
+    return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', currency: 'NOT', error: e.message });
   }
+});
 
-  function askCaptcha(uid, key, wrong) {
-    const a = Math.floor(Math.random() * 10) + 1;
-    const b = Math.floor(Math.random() * 10) + 1;
-    setA(key, 'captcha', { answer: a + b });
-    bot.sendMessage(uid,
-      (wrong ? '❌ Wrong answer!\n\nTry again:\n\n' : '🤖 <b>ARE YOU A ROBOT?</b>\n\nProve you are human first:\n\n') +
-      '🧮 <b>' + a + ' + ' + b + ' = ?</b>\n\n👉 Send your answer:',
-      { parse_mode: 'HTML' }
-    ).catch(e => console.log(`[engine:${botId}] captcha send failed: ${e.message.slice(0, 80)}`));
+app.post('/pay/jetton', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const wallet = cleanString(body.wallet || body.address);
+    const amount = safeAmount(body.amount);
+    const currency = normalizeCurrency(body.jetton_symbol || body.currency || body.asset);
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (!currency) return res.status(400).json({ ok: false, error: 'jetton_symbol/currency is required' });
+    const clientId = cleanString(body.clientWithdrawalId) || makeClientId('jetton', body.botId || 'bot', body.uid || body.userId);
+    const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });
+    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency, amount, wallet, clientId, result: result.data });
+  } catch (e) {
+    console.error('[JETTON]', e.message);
+    return res.status(e.status || 502).json({ ok: false, error: e.message });
   }
+});
 
-  async function showChannels(uid) {
-    const rows = [[{ text: '💼 Official Channel', url: OFFICIAL_URL }]];
-    let channelNum = 1;
-    for (const ch of mustJoin) {
-      rows.push([{ text: '📢 Channel ' + channelNum + ' (Required)', url: chanUrl(ch) }]);      channelNum++;
-    }
-    for (const ch of nonMust) {
-      rows.push([{ text: '📢 Channel ' + channelNum, url: chanUrl(ch) }]);
-      channelNum++;
-    }
-    if (payout) rows.push([{ text: '💰 Payment Channel', url: chanUrl(payout) }]);
-    rows.push([{ text: '✅ START', callback_data: 'continue' }]);
-
-    const welcomeMsg = '🎉 <b>Welcome to ' + esc(name) + '!</b>\n\n' +
-      'Here\'s how it works:\n' +
-      '• Invite friends using your unique link\n' +
-      '• Earn ' + esc(currency) + ' for every friend who joins\n' +
-      '• Withdraw your earnings anytime\n\n' +
-      '👉 <i>First, join our channels:</i>\n\n' +
-      '🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
-
-    await bot.sendMessage(uid, welcomeMsg, { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML', disable_web_page_preview: true })
-      .catch(e => console.log(`[engine:${botId}] showChannels send failed: ${e.message.slice(0, 80)}`));
+app.post('/pay/xrocket', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const telegramUserId = cleanString(body.telegramUserId || body.userId || body.uid);
+    const amount = safeAmount(body.amount);
+    const currency = normalizeCurrency(body.currency || body.asset);
+    if (!telegramUserId) return res.status(400).json({ ok: false, error: 'telegramUserId is required' });
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });    
+    if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
+    const clientId = cleanString(body.clientPayoutId) || makeClientId('rocket', body.botId || 'bot', telegramUserId);
+    const result = await payWithXRocket({ telegramUserId, amount, currency, clientPayoutId: clientId, description: body.description || 'Bot reward withdrawal' });
+    return res.json({ ok: true, success: true, provider: 'AutoPay2', currency, amount, telegramUserId, clientId, status: result.status, result: result.data });
+  } catch (e) {
+    console.error('[xRocket route]', e.message);
+    return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay2', error: e.message });
   }
+});
 
-  bot.onText(/\/start(?:\s+(\d+))?/, safe(async (msg, match) => {
-    const uid = msg.chat.id;
-    const key = botId + ':' + uid;
-    delete awaiting[key];
-    const alive = await refreshCfg();
-    if (!alive) return;
-    const got = await getUser(botId, uid);
-    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned from this bot.</b>', { parse_mode: 'HTML' }).catch(() => {});
-    if (got.isNew) await db.collection('bots').doc(botId).update({ users: FieldValue.increment(1) }).catch(() => {});
-    await db.collection('bots').doc(botId).update({ lastActive: Date.now() }).catch(() => {});
+app.get('/api/bot/:id/withdrawals', async (req, res) => {
+  try {    const snap = await db.collection('bots').doc(req.params.id).collection('withdrawals').limit(500).get();
+    const withdrawals = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });    
+    res.json({ success: true, withdrawals });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
-    const refId = match && match[1] ? match[1] : null;
-    if (refId && refId !== String(uid) && !got.data.refer) {
-      await got.ref.update({ refer: refId }).catch(() => {});
-      await db.collection('bots').doc(botId).collection('users').doc(refId).update({ balance: FieldValue.increment(refB), refs: FieldValue.increment(1) }).catch(() => {});
-      bot.sendMessage(refId, '🎁 You earned <b>' + refB + ' ' + esc(currency) + '</b> for a new referral!', { parse_mode: 'HTML' }).catch(() => {});
-    }
-    await showChannels(uid);
-  }));
+async function applyPayment(memo, amount, currency, txHash, sender) {
+  const parts = String(memo || '').split('_');
+  const type = parts[1];
+  if (type === 'PREMIUM') {
+    const uid = parts[2];
+    const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    await db.collection('users').doc(uid).set({ isPremium: true, premiumExpiresAt: expires, premiumMethod: currency, premiumTxHash: txHash }, { merge: true });
+    return { type: type, uid: uid };
+  }
+  if (type === 'UPLOAD') return { type: type, uid: parts[2] };
+  if (type === 'BUY') {
+    const itemId = parts[2], uid = parts[3];
+    const itemRef = db.collection('storeTemplates').doc(itemId);
+    const item = await itemRef.get();
+    if (!item.exists) return { type: type, error: 'item gone' };
+    const d = item.data();
+    if (d.status === 'sold') return { type: type, error: 'already sold' };
+    await itemRef.update({ status: 'sold', soldTo: uid, soldAt: Date.now() });
+    await db.collection('users').doc(uid).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(itemId) }, { merge: true });
+    await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });
+    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
+    return { type: type, uid: uid, itemId: itemId, link: d.link };  
+  }
+  return { type: 'unknown' };
+}
 
-  bot.on('message', safe(async (msg) => {
-    const uid = msg.chat.id;
-    const key = botId + ':' + uid;
-    if (lastMsg[key] === msg.message_id) return;
-    lastMsg[key] = msg.message_id;
-    const txt = (msg.text || '').trim();
-    if (!txt) return;
-    if (txt.startsWith('/')) { delete awaiting[key]; return; }
-    const got = await getUser(botId, uid);    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
+app.post('/api/check-payment', async (req, res) => {
+  try {
+    const memo = req.body.memo;
+    if (!memo) return res.status(400).json({ error: 'Memo required' });    
+    const snap = await db.collection('payments').where('memo', '==', memo).where('status', '==', 'confirmed').limit(1).get();
+    if (snap.empty) return res.json({ confirmed: false });
+    const p = snap.docs[0].data();
+    res.json({ confirmed: true, type: p.payType, link: p.link || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    const st = getA(key);
-    if (st) {
-      delete awaiting[key];
-      if (st.type === 'captcha') {
-        if (parseInt(txt, 10) === st.answer) {
-          await got.ref.update({ captchaPassed: true });
-          bot.sendMessage(uid, '✅ <b>Human verified!</b>', { parse_mode: 'HTML' }).catch(() => {});
-          return bot.sendMessage(uid, '🏡 <b>' + esc(name) + ' Menu</b>\n\nTap an option below:', menuKeyboard()).catch(() => {});
-        }
-        return askCaptcha(uid, key, true);
-      }
-      if (st.type === 'wallet') {
-        await got.ref.update({ wallet: txt });
-        return bot.sendMessage(uid, '✅ <b>Wallet saved</b>\n\n👛 <code>' + esc(txt) + '</code>', { parse_mode: 'HTML' }).catch(() => {});
-      }
-      if (st.type === 'withdraw') return handleWithdrawAmount(uid, txt, got);
-      if (st.type === 'proof') return saveProof(uid, msg, st.task, st.reward);
-    }
+app.post('/api/process-payment', async (req, res) => {
+  try {
+    const body = req.body;    if (!body.txHash || !body.memo) return res.status(400).json({ error: 'Missing fields' });
+    const exist = await db.collection('payments').where('txHash', '==', body.txHash).limit(1).get();    
+    if (!exist.empty) return res.json({ success: true, message: 'already processed' });
+    const result = await applyPayment(body.memo, body.amount, body.currency, body.txHash, body.sender);
+    await db.collection('payments').add({ txHash: body.txHash, memo: body.memo, amount: body.amount, currency: body.currency, sender: body.sender, status: 'confirmed', payType: result.type, link: result.link || null, at: Date.now() });
+    res.json({ success: true, result: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    if (txt === '🏦 Balance') return handleBalance(uid, got);
-    if (txt === '🎁 Invite') return handleInvite(uid, got);
-    if (txt === '📋 Tasks') return handleTasks(uid);
-    if (txt === '👛 Wallet' && (pay === 'Manual' || pay === 'AutoPay1')) {
-      setA(key, 'wallet');
-      return bot.sendMessage(uid, '👛 Current wallet:\n<code>' + esc(got.data.wallet) + '</code>\n\n📝 Send your new wallet address:', { parse_mode: 'HTML' }).catch(() => {});
-    }
-    if (txt === '💸 Withdraw') {
-      if (!minW || !maxW || !payout) return bot.sendMessage(uid, '⚠️ Bot owner has not finished setup yet. Try later.').catch(() => {});
-      if ((pay === 'Manual' || pay === 'AutoPay1') && (!got.data.wallet || got.data.wallet === 'Not Set')) {
-        return bot.sendMessage(uid, '⚠️ Set your wallet first: tap <b>👛 Wallet</b>', { parse_mode: 'HTML' }).catch(() => {});
-      }
-      setA(key, 'withdraw');
-      return bot.sendMessage(uid,
-        '💸 <b>WITHDRAW</b>\n\n' +
-        '💰 Enter amount (' + esc(currency) + ')\n' +
-        '⬇️ Min: ' + minW + '  ·  ⬆️ Max: ' + maxW +
-        (fee > 0 ? '\n💳 Fee: ' + fee + ' ' + esc(currency) : '') +
-        '\n\n<i>Want more? Tap Earn More below:</i>',
-        { reply_markup: { inline_keyboard: [[{ text: '🎯 Earn More', callback_data: 'earnmore' }]] }, parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
-  }));
+app.post('/api/admin/payments/:pid/approve', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const ref = db.collection('payments').doc(req.params.pid);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    const p = doc.data();
+    const result = await applyPayment(p.memo, p.amount, 'NGN', p.ref, p.ownerId);
+    await ref.update({ status: 'confirmed', payType: result.type, link: result.link || null });
+    res.json({ success: true, result: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-  bot.on('callback_query', safe(async (cq) => {
-    const uid = cq.from.id;
-    const key = botId + ':' + uid;
+app.get('/api/user/:uid/profile', async (req, res) => {
+  try {
+    const doc = await db.collection('users').doc(req.params.uid).get();
+    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });  
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    if (cq.data === 'continue') {      await refreshCfg();
-      for (const ch of mustJoin) {
-        const chan = normchan(ch);
-        let m;
-        try { m = await bot.getChatMember(chan, uid); }
-        catch (e) {
-          console.log(`[engine:${botId}] getChatMember error for ${chan}: ${e.message}`);
-          return bot.answerCallbackQuery(cq.id, { text: '⚠️ Bot is not admin in ' + ch + ' — contact the owner.', show_alert: true }).catch(() => {});
-        }
-        if (m.status === 'left' || m.status === 'kicked') {
-          return bot.answerCallbackQuery(cq.id, { text: '❌ Please join ' + ch + ' first!', show_alert: true }).catch(() => {});
-        }
-      }
-      await bot.answerCallbackQuery(cq.id, { text: '✅ Channels verified!' }).catch(() => {});
-      if (botDetect) {
-        const got = await getUser(botId, uid);
-        if (!got.data.captchaPassed) return askCaptcha(uid, key, false);
-      }
-      return bot.sendMessage(uid, '🏡 <b>' + esc(name) + ' Menu</b>\n\nTap an option below:', menuKeyboard()).catch(() => {});
-    }
+app.get('/api/store/templates', async (req, res) => {
+  try {    
+    const snap = await db.collection('storeTemplates').where('active', '==', true).get();
+    const t = [];
+    snap.forEach(function(d) { t.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, templates: t });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    if (cq.data === 'earnmore') {
-      const me = await bot.getMe();
-      const rows = taskRows();
-      rows.push([{ text: '🎁 Invite Friends — earn ' + refB + ' ' + currency, url: 'https://t.me/' + me.username + '?start=' + uid }]);
-      return bot.sendMessage(uid,
-        '<b>🎯 EARN MORE ' + esc(currency) + '</b>\n\n━━━━━━━━━━━━━━\n\n' +
-        '1️⃣ <b>Invite friends</b> — earn ' + refB + ' ' + esc(currency) + ' per referral\n' +
-        '<code>https://t.me/' + me.username + '?start=' + uid + '</code>\n\n' +
-        '2️⃣ <b>Complete tasks</b> — tap a task below:\n\n━━━━━━━━━━━━━━',
-        { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
+app.post('/api/store/add', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const item = req.body;    
+    if (!item.name || !item.price) return res.status(400).json({ error: 'Name and price required' });
+    const doc = await db.collection('storeTemplates').add(Object.assign({}, item, { sellerId: 'OWNER', sellerWallet: '', status: 'available', active: true, createdAt: Date.now() }));
+    res.json({ success: true, id: doc.id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    if (cq.data && cq.data.indexOf('task_') === 0) {
-      const idx = parseInt(cq.data.split('_')[1], 10);
-      const t = tasks[idx];
-      if (!t) return;
-      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid,
-        '📋 <b>' + esc(t.n) + '</b>\n\n🔗 ' + esc(t.l) + '\n\n' +
-        (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') +
-        '📸 Now send your proof (screenshot or text):',
-        { parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
+app.post('/api/store/upload', async (req, res) => {
+  try {
+    const b = req.body;
+    if (!b.sellerId || !b.name || !b.link) return res.status(400).json({ error: 'Missing fields' });
+    const doc = await db.collection('storeTemplates').add({ name: b.name, desc: b.desc || '', icon: b.icon || 'bi-robot', type: b.type || 'bot', link: b.link, price: b.price || '1 TON', sellerId: b.sellerId, sellerWallet: b.wallet || '', status: 'available', active: true, createdAt: Date.now() });
+    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');
+    res.json({ success: true, id: doc.id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    if (cq.data && (cq.data.indexOf('approve_') === 0 || cq.data.indexOf('decline_') === 0)) {
-      const approve = cq.data.indexOf('approve_') === 0;
-      const pid = cq.data.split('_')[1];      const ref = db.collection('bots').doc(botId).collection('proofs').doc(pid);
-      const doc = await ref.get();
-      if (doc.exists) {
-        const p = doc.data();
-        if (approve && p.reward) {
-          await db.collection('bots').doc(botId).collection('users').doc(p.uid).update({ balance: FieldValue.increment(p.reward) }).catch(() => {});
-          bot.sendMessage(p.uid, '✅ <b>APPROVED!</b>\n\n🎁 You earned <b>' + p.reward + ' ' + esc(currency) + '</b>!', { parse_mode: 'HTML' }).catch(() => {});
-        } else {
-          bot.sendMessage(p.uid, approve ? '✅ <b>Your proof was APPROVED!</b>' : '❌ <b>Your proof was declined.</b>', { parse_mode: 'HTML' }).catch(() => {});
-        }
-        await ref.delete();
-      }
-      try { await bot.editMessageText(approve ? '✅ Approved & deleted.' : '❌ Declined & deleted.', { chat_id: cq.message.chat.id, message_id: cq.message.message_id }); } catch (e) {}
-    }
-  }));
+app.post('/api/store/purchase', async (req, res) => {
+  try {
+    const b = req.body;
+    await db.collection('users').doc(b.userId).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId) }, { merge: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
-  async function saveProof(uid, msg, taskName, reward) {
-    try {
-      const docRef = await db.collection('bots').doc(botId).collection('proofs').add({
-        uid: String(uid), task: taskName, reward: reward || 0, text: msg.text || '',
-        photo: msg.photo ? msg.photo[msg.photo.length - 1].file_id : null, status: 'pending', at: Date.now()
+cron.schedule('0 0 * * *', async () => {
+  try {
+    const now = new Date().toISOString();
+    const snap = await db.collection('users').where('isPremium', '==', true).where('premiumExpiresAt', '<', now).get();
+    for (const d of snap.docs) await d.ref.update({ isPremium: false });
+  } catch (e) {    
+    console.error('[cron] premium expiry error:', e.message);
+  }
+});
+
+function adminAuth(req) {
+  const key = req.headers['x-admin-key'];
+  return key && key === process.env.ADMIN_KEY;
+}
+
+app.get('/api/admin/chats', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });    const snap = await db.collection('chats').orderBy('lastAt', 'desc').limit(50).get();
+    const chats = [];    
+    snap.forEach(function (d) { chats.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, chats: chats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/chat/:uid', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
+    const snap = await db.collection('chats').doc(req.params.uid).collection('messages').orderBy('at', 'asc').limit(200).get();
+    const messages = [];
+    snap.forEach(function (d) { messages.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, messages: messages });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/chat/:uid/send', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
+    const text = req.body.text;
+    if (!text) return res.status(400).json({ error: 'Text required' });
+    await db.collection('chats').doc(req.params.uid).collection('messages').add({ from: 'admin', text: text, at: Date.now() });
+    await db.collection('chats').doc(req.params.uid).set({ userId: req.params.uid, lastMsg: text, lastAt: Date.now() }, { merge: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/payments', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var snap = await db.collection('payments').where('status', '==', 'pending').get();
+    var payments = [];
+    snap.forEach(function (d) { payments.push(Object.assign({ id: d.id }, d.data())); });
+    payments.sort(function (a, b) { return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0); });
+    res.json({ success: true, payments: payments });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/payments/:id/confirm', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var doc = await db.collection('payments').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    var p = doc.data();
+    await db.collection('payments').doc(req.params.id).update({
+      status: 'confirmed',
+      confirmedAt: Date.now(),
+      confirmedBy: 'owner'
+    });    if (p.ownerId && (p.payMode === 'premium' || !p.payMode)) {
+      await db.collection('users').doc(p.ownerId).update({        
+        plan: 'premium',
+        planUpgradedAt: Date.now()
       });
-      const caption = '🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ' + esc(taskName) + '\n🎁 Prize: ' + (reward || 0) + ' ' + esc(currency) + '\n👤 User ID: <code>' + uid + '</code>\n📝 ' + esc(msg.text || '(photo)');
-      const btns = { reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: 'approve_' + docRef.id }, { text: '❌ Decline', callback_data: 'decline_' + docRef.id }]] }, parse_mode: 'HTML' };
-      if (msg.photo) {
-        await notifyPayout(caption, btns);
-        await bot.sendPhoto(normchan(payout), msg.photo[msg.photo.length - 1].file_id, { caption: 'Proof from ' + uid }).catch(() => {});
-      } else {
-        await notifyPayout(caption, btns);
-      }
-      bot.sendMessage(uid, '✅ Proof sent for review!', { parse_mode: 'HTML' }).catch(() => {});
-    } catch (e) {
-      console.log(`[engine:${botId}] saveProof failed: ${e.message}`);
-      bot.sendMessage(uid, '❌ Failed to save proof. Try again.', { parse_mode: 'HTML' }).catch(() => {});
     }
-  }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
-  async function handleBalance(uid, got) {
-    await bot.sendMessage(uid,
-      '<b>🏦 MY ACCOUNT</b>\n\n━━━━━━━━━━━━━━\n\n🏦 Balance: <b>' + Number(got.data.balance || 0).toFixed(2) + ' ' + esc(currency) + '</b>\n\n' +
-      '👛 Wallet: <code>' + esc(got.data.wallet) + '</code>\n\n' +
-      '🎁 Referrals: ' + (got.data.refs || 0) + '\n\n' +
-      '💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>' +
-      (fee > 0 ? '\n\n💳 Withdraw fee: <b>' + fee + ' ' + esc(currency) + '</b>' : '') +
-      '\n\n━━━━━━━━━━━━━━\n' +
-      '🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>',
-      { parse_mode: 'HTML', disable_web_page_preview: true }
-    ).catch(() => {});
-  }
-  async function handleInvite(uid, got) {
-    const me = await bot.getMe();
-    await bot.sendMessage(uid,
-      '<b>🎁 INVITE & EARN</b>\n\n━━━━━━━━━━━━━━\n\n💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>\n\n🎁 Your referrals: ' + (got.data.refs || 0) + '\n\n━━━━━━━━━━━━━━\n\nYour link:\n<code>https://t.me/' + me.username + '?start=' + uid + '</code>',
-      { parse_mode: 'HTML' }
-    ).catch(() => {});
-  }
-
-  function taskRows() {
-    return tasks.map((t, i) => [{ text: (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: 'task_' + i }]);
-  }
-
-  async function handleTasks(uid) {
-    if (!tasks.length) return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
-    await bot.sendMessage(uid, '📋 <b>TASKS</b>\n\nTap a task, complete it, then send proof:', { reply_markup: { inline_keyboard: taskRows() }, parse_mode: 'HTML' }).catch(() => {});
-  }
-
-  function receipt(status, amount, feeAmount, receivedAmount, wallet, txHash, newBalance, paid) {
-    let out = '';
-    out += (paid ? '✅ <b>Withdrawal Paid Successfully!</b>' : '✅ <b>Withdrawal Request Submitted!</b>') + '\n\n';
-    out += '💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n';
-    if (feeAmount > 0) out += '💳 Fee: <b>' + feeAmount + ' ' + esc(currency) + '</b>\n\n';
-    out += (paid ? '📤 You Received: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' : '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n');
-    out += '📦 Status: <b>' + status + '</b>\n\n';
-    if (pay === 'AutoPay2') out += '📬 Delivery: <b>Your Telegram account</b> (xRocket)\n\n';
-    else out += '🏦 Wallet:\n<code>' + esc(wallet) + '</code>\n\n';
-    if (txHash) out += '💳 Transaction:\n<code>' + esc(txHash) + '</code>\n\n';
-    out += '💰 Remaining Balance:\n<b>' + newBalance.toFixed(2) + ' ' + esc(currency) + '</b>';
-    if (!paid) out += '\n\n<i>⏳ Owner will process your payment soon.</i>';
-    return out;
-  }
-
-  async function handleWithdrawAmount(uid, raw, got) {
-    const amount = parseFloat(raw);
-    if (isNaN(amount)) return bot.sendMessage(uid, '❌ Numbers only.').catch(() => {});
-    if (amount < minW || amount > maxW) return bot.sendMessage(uid, '❌ Between ' + minW + ' and ' + maxW + ' ' + esc(currency)).catch(() => {});
-    if (Number(got.data.balance || 0) < amount) return bot.sendMessage(uid, '❌ Insufficient balance (' + Number(got.data.balance || 0).toFixed(2) + ' ' + esc(currency) + ')').catch(() => {});
-
-    const feeAmount = fee;
-    const receivedAmount = Math.max(0, amount - feeAmount);
-    const cleanReceived = cleanAmount(receivedAmount);
-    if (!cleanReceived) return bot.sendMessage(uid, '❌ Invalid withdrawal amount after fee.').catch(() => {});
-
-    const walletLine = pay === 'AutoPay2' ? '📬 Delivery: <b>Your Telegram account</b> (xRocket)' : '🏦 Wallet:\n<code>' + esc(got.data.wallet) + '</code>';
-
-    await bot.sendMessage(uid,
-      '⏳ <b>Processing withdrawal...</b>\n\n' +
-      '💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n' +
-      (feeAmount > 0 ? '💳 Fee: <b>' + feeAmount + ' ' + esc(currency) + '</b>\n\n' : '') +
-      '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +      walletLine,
-      { parse_mode: 'HTML' }
-    ).catch(() => {});
-
-    if (pay === 'AutoPay1') {
-      if (!isAutoPayCoin(currency)) {
-        return bot.sendMessage(uid, '❌ <b>AutoPay1 does not support ' + esc(currency) + '</b>\n\nOnly these coins support auto payment:\n' + AUTO_PAY_COINS.join(', ') + '\n\nPlease switch to Manual payment or use a supported coin.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-
-      let txHash = '';
-      try {
-        const result = await sendPTPayment({ botId, apiKey, currency, wallet: got.data.wallet, amount: cleanReceived, comment: name });
-        txHash = result.txHash || '';
-        await got.ref.update({ balance: FieldValue.increment(-amount) });
-        await logWithdraw(uid, amount, 'paid', got.data.wallet, txHash, feeAmount, receivedAmount, { provider: 'PT', providerStatus: 'finished' });
-        await notifyPayout('✅ <b>AutoPay1 PAID</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + ' (received ' + receivedAmount + ')\n\n👛 ' + esc(got.data.wallet) + (txHash ? '\n\n💳 TX: <code>' + esc(txHash) + '</code>' : ''));
-        const newBalance = Number(got.data.balance || 0) - amount;
-        return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, got.data.wallet, txHash, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        const err = providerError(e, 'PT payment failed');
-        console.log(`[engine:${botId}] ❌ AutoPay1 ERROR: ${err}`);
-        await logWithdraw(uid, amount, 'failed', got.data.wallet, null, feeAmount, receivedAmount, { provider: 'PT', error: err });
-        await notifyPayout('❌ <b>AutoPay1 FAILED</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n👛 ' + esc(got.data.wallet) + '\n\n⚠️ ' + esc(err).slice(0, 300));
-        return bot.sendMessage(uid, '❌ <b>Payment failed</b>\n\n⚠️ ' + esc(err).slice(0, 250) + '\n\n💰 Balance NOT deducted.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-    }
-
-    if (pay === 'AutoPay2') {
-      if (!isAutoPayCoin(currency)) {
-        return bot.sendMessage(uid, '❌ <b>AutoPay2 does not support ' + esc(currency) + '</b>\n\nOnly these coins support auto payment:\n' + AUTO_PAY_COINS.join(', ') + '\n\nPlease switch to Manual payment or use a supported coin.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-
-      let payoutId = '';
-      try {
-        const result = await sendXRocketPayment({ botId, apiKey, uid, currency, amount: cleanReceived, description: name });
-        payoutId = result.payoutId || '';
-
-        if (!result.paid) {
-          await logWithdraw(uid, amount, 'pending', 'telegram', payoutId, feeAmount, receivedAmount, { provider: 'xRocket', providerStatus: result.status, clientPayoutId: result.clientPayoutId });
-          await notifyPayout('⏳ <b>AutoPay2 PENDING</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n📦 Status: ' + result.status);
-          return bot.sendMessage(uid, '⏳ <b>Payment submitted</b>\n\n💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n📦 Status: <b>PENDING</b>\n\n💰 <b>Balance NOT deducted yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
-        }
-
-        await got.ref.update({ balance: FieldValue.increment(-amount) });
-        await logWithdraw(uid, amount, 'paid', 'telegram', payoutId, feeAmount, receivedAmount, { provider: 'xRocket', providerStatus: 'finished', clientPayoutId: result.clientPayoutId });
-        await notifyPayout('✅ <b>AutoPay2 PAID</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + ' (received ' + receivedAmount + ')' + (payoutId ? '\n\n💳 Payout ID: <code>' + esc(payoutId) + '</code>' : ''));
-        const newBalance = Number(got.data.balance || 0) - amount;
-        return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, 'telegram', payoutId, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        const err = providerError(e, 'xRocket payment failed');        console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
-        await logWithdraw(uid, amount, 'failed', 'telegram', null, feeAmount, receivedAmount, { provider: 'xRocket', error: err });
-        await notifyPayout('❌ <b>AutoPay2 FAILED</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n⚠️ ' + esc(err).slice(0, 300));
-        return bot.sendMessage(uid, '❌ <b>Payment failed</b>\n\n⚠️ ' + esc(err).slice(0, 250) + '\n\n💰 Balance NOT deducted.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-    }
-
-    try {
-      await got.ref.update({ balance: FieldValue.increment(-amount) });
-      await logWithdraw(uid, amount, 'pending', got.data.wallet, null, feeAmount, receivedAmount, { provider: 'Manual' });
-      const uname = await getUsername(uid);
-      await notifyPayout(
-        '📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n' +
-        '🤖 Bot: ' + esc(name) + '\n\n' +
-        '👤 User ID: <code>' + uid + '</code>\n\n' +
-        '🧑 User: ' + esc(uname || 'no username') + '\n\n' +
-        '💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n' +
-        (feeAmount > 0 ? '💳 Fee: ' + feeAmount + ' ' + esc(currency) + '\n\n' : '') +
-        '📤 Pay this user: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +
-        '👛 Wallet: <code>' + esc(got.data.wallet) + '</code>\n\n' +
-        '📦 Status: <b>PENDING</b>\n\n' +
-        '🕒 ' + new Date().toLocaleString()
-      );
-      const newBalance = Number(got.data.balance || 0) - amount;
-      bot.sendMessage(uid, receipt('PENDING', amount, feeAmount, receivedAmount, got.data.wallet, '', newBalance, false), { parse_mode: 'HTML' }).catch(() => {});
-    } catch (e) {
-      console.log(`[engine:${botId}] ❌ Manual withdraw error: ${e.message}`);
-      bot.sendMessage(uid, '❌ Error processing withdrawal. Try again.', { parse_mode: 'HTML' }).catch(() => {});
-    }
-  }
-}
-
-function stopBot(botId) {
-  const info = activeBots[botId];
-  if (!info) return;
-  try { info.bot.stopPolling(); } catch (e) {}
-  try { delete tokenOwner[info.cfg.token]; } catch (e) {}
-  delete activeBots[botId];
-  console.log(`[engine:${botId}] ⏹ stopped`);
-}
-
-async function restartBot(botId) {
-  stopBot(botId);
+app.post('/api/admin/payments/:id/reject', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
   try {
-    const snap = await db.collection('bots').doc(botId).get();
-    if (!snap.exists) return;
-    const cfg = Object.assign({ id: snap.id }, snap.data());
-    if (cfg.status === 'active') startBot(cfg);
-  } catch (e) {
-    console.error(`[engine:${botId}] ❌ restart error: ${e.message}`);  }
-}
+    await db.collection('payments').doc(req.params.id).update({ status: 'rejected', rejectedAt: Date.now() });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
-async function loadAllBots() {
+app.delete('/api/store/:id', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
   try {
-    const snap = await db.collection('bots').where('status', '==', 'active').get();
-    console.log(`[engine] 🔄 loading ${snap.size} bots...`);
-    let i = 0;
-    for (const d of snap.docs) {
-      try { startBot(Object.assign({ id: d.id }, d.data())); }
-      catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
-      i++;
-      if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
-    }
-    console.log('[engine] ✅ all bots live');
-  } catch (e) {
-    console.error('[engine] ❌ loadAllBots error:', e.message);
-  }
-}
+    await db.collection('storeTemplates').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
-setInterval(async () => {
-  try {
-    const snap = await db.collection('bots').where('status', '==', 'active').get();
-    let healed = 0;
-    for (const doc of snap.docs) {
-      if (!activeBots[doc.id]) {
-        console.log(`[engine:heal] 🩹 restarting missing bot ${doc.id}`);
-        startBot(Object.assign({ id: doc.id }, doc.data()));
-        healed++;
-        await new Promise(r => setTimeout(r, 800));
-      }
-    }
-    if (healed > 0) console.log(`[engine:heal] ✅ healed ${healed} bots`);
-  } catch (e) {
-    console.error('[engine:heal] ❌ sweep error:', e.message);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, function() {
+  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
+  console.log('[payments] Supported coins:', AUTO_PAY_COINS.join(', '));
+  engine.loadAllBots();
+  const APP_URL = process.env.APP_URL || '';
+  if (APP_URL) {
+    setInterval(function() { axios.get(APP_URL + '/ping', { timeout: 3000 }).catch(function() {}); }, 1000);
+    console.log('[keepalive] pinging every 1 second - service will never sleep');
+  } else {
+    console.log('[keepalive] APP_URL not set - self-ping disabled');
   }
-}, 180000);
-
-module.exports = { startBot, stopBot, restartBot, loadAllBots, activeBots, sendTo };
+});
