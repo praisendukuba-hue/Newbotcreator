@@ -124,12 +124,9 @@ function isAuthError(err) {
   return /401|403|unauthorized|bot was blocked|token invalid|deleted/i.test(msg);
 }
 
-// Sanitize description for xRocket (remove special chars, limit length)
 function sanitizeDescription(text) {
   if (!text) return '';
-  // Remove special characters, keep only alphanumeric and basic punctuation
   const cleaned = String(text).replace(/[^a-zA-Z0-9\s\-_]/g, '').trim();
-  // Limit to 50 characters (xRocket requirement)
   return cleaned.substring(0, 50);
 }
 
@@ -145,10 +142,10 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
     payload.comment = comment || 'Clur Bot withdrawal';
   } else if (ptConfig.type === 'jetton') {
     payload.jetton_symbol = ptConfig.symbol;
-    payload.comment = comment || 'Clur Bot withdrawal';  } else if (ptConfig.type === 'bnb') {
+    payload.comment = comment || 'Clur Bot withdrawal';
+  } else if (ptConfig.type === 'bnb') {
     payload.comment = comment || 'Clur Bot withdrawal';
   }
-
   console.log(`[engine:${botId}] AutoPay1 request: ${currency} → ${wallet} (${amount})`);
   console.log(`[engine:${botId}] PT URL: ${ptConfig.url}`);
   console.log(`[engine:${botId}] PT payload:`, JSON.stringify(payload));
@@ -184,7 +181,6 @@ async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, descri
   const asset = xrAsset(currency);
   const clientPayoutId = 'CLUR-' + botId + '-' + uid + '-' + Date.now();
 
-  // xRocket payload - description is OPTIONAL and must be sanitized
   const payload = {
     clientPayoutId,
     target: String(uid),
@@ -193,13 +189,12 @@ async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, descri
     amount: String(amount)
   };
 
-  // Only add description if it's valid (sanitized and not empty)
-  const sanitizedDesc = sanitizeDescription(description);  if (sanitizedDesc) {
+  const sanitizedDesc = sanitizeDescription(description);
+  if (sanitizedDesc) {
     payload.description = sanitizedDesc;
   }
 
   const url = 'https://pay.api.xrocket.exchange/api/v1/payouts';
-
   console.log(`[engine:${botId}] AutoPay2 request: ${asset} → Telegram user ${uid} (${amount})`);
   console.log(`[engine:${botId}] xRocket URL: ${url}`);
   console.log(`[engine:${botId}] xRocket payload:`, JSON.stringify(payload));
@@ -248,8 +243,7 @@ function startBot(cfgIn) {
   const prev = tokenOwner[cfg.token];
   if (prev && prev !== botId) stopBot(prev);
 
-  const bot = new TelegramBot(cfg.token, { polling: true });
-  activeBots[botId] = { bot, cfg };
+  const bot = new TelegramBot(cfg.token, { polling: true });  activeBots[botId] = { bot, cfg };
   tokenOwner[cfg.token] = botId;
   botErrors[botId] = 0;
 
@@ -292,13 +286,13 @@ function startBot(cfgIn) {
     }
     console.log(`[engine:${botId}] ⚠️ Could not verify token after 3 attempts.`);
   })();
+
   bot.on('polling_error', (err) => {
     const msg = String((err && err.message) || err);
     botErrors[botId] = (botErrors[botId] || 0) + 1;
     if (isAuthError(err)) {
       deactivate('Auth error: ' + msg.slice(0, 100));
-    } else if (/409/.test(msg)) {
-      console.log(`[engine:${botId}] ⚠️ 409 conflict - another poller is running`);
+    } else if (/409/.test(msg)) {      console.log(`[engine:${botId}] ⚠️ 409 conflict - another poller is running`);
     } else if (/ETELEGRAM|network|timeout|ECONNRESET|socket hang/i.test(msg)) {
       if (botErrors[botId] % 10 === 1) {
         console.log(`[engine:${botId}] network blip (${botErrors[botId]} total): ${msg.slice(0, 100)}`);
@@ -341,12 +335,12 @@ function startBot(cfgIn) {
       botDetect = d.botDetect === true;
       name = d.name || name;
       fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);
-      return true;    } catch (e) {
+      return true;
+    } catch (e) {
       console.log(`[engine:${botId}] refreshCfg error: ${e.message}`);
       return true;
     }
   }
-
   const menuKeyboard = () => {
     const keyboard = [
       [{ text: '🏦 Balance' }, { text: '🎁 Invite' }],
@@ -390,13 +384,13 @@ function startBot(cfgIn) {
     const rows = [[{ text: '💼 Official Channel', url: OFFICIAL_URL }]];
     let channelNum = 1;
     for (const ch of mustJoin) {
-      rows.push([{ text: '📢 Channel ' + channelNum + ' (Required)', url: chanUrl(ch) }]);      channelNum++;
+      rows.push([{ text: '📢 Channel ' + channelNum, url: chanUrl(ch) }]);
+      channelNum++;
     }
     for (const ch of nonMust) {
       rows.push([{ text: '📢 Channel ' + channelNum, url: chanUrl(ch) }]);
       channelNum++;
-    }
-    if (payout) rows.push([{ text: '💰 Payment Channel', url: chanUrl(payout) }]);
+    }    if (payout) rows.push([{ text: '💰 Payment Channel', url: chanUrl(payout) }]);
     rows.push([{ text: '✅ START', callback_data: 'continue' }]);
 
     const welcomeMsg = '🎉 <b>Welcome to ' + esc(name) + '!</b>\n\n' +
@@ -439,13 +433,13 @@ function startBot(cfgIn) {
     const txt = (msg.text || '').trim();
     if (!txt) return;
     if (txt.startsWith('/')) { delete awaiting[key]; return; }
-    const got = await getUser(botId, uid);    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
+    const got = await getUser(botId, uid);
+    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
 
     const st = getA(key);
     if (st) {
       delete awaiting[key];
-      if (st.type === 'captcha') {
-        if (parseInt(txt, 10) === st.answer) {
+      if (st.type === 'captcha') {        if (parseInt(txt, 10) === st.answer) {
           await got.ref.update({ captchaPassed: true });
           bot.sendMessage(uid, '✅ <b>Human verified!</b>', { parse_mode: 'HTML' }).catch(() => {});
           return bot.sendMessage(uid, '🏡 <b>' + esc(name) + ' Menu</b>\n\nTap an option below:', menuKeyboard()).catch(() => {});
@@ -488,13 +482,13 @@ function startBot(cfgIn) {
     const uid = cq.from.id;
     const key = botId + ':' + uid;
 
-    if (cq.data === 'continue') {      await refreshCfg();
+    if (cq.data === 'continue') {
+      await refreshCfg();
       for (const ch of mustJoin) {
         const chan = normchan(ch);
         let m;
         try { m = await bot.getChatMember(chan, uid); }
-        catch (e) {
-          console.log(`[engine:${botId}] getChatMember error for ${chan}: ${e.message}`);
+        catch (e) {          console.log(`[engine:${botId}] getChatMember error for ${chan}: ${e.message}`);
           return bot.answerCallbackQuery(cq.id, { text: '⚠️ Bot is not admin in ' + ch + ' — contact the owner.', show_alert: true }).catch(() => {});
         }
         if (m.status === 'left' || m.status === 'kicked') {
@@ -522,22 +516,50 @@ function startBot(cfgIn) {
       ).catch(() => {});
     }
 
+    // ✅ UPDATED TASK FEATURE: Shows BOTH "Open Task" and "Submit Proof" buttons
     if (cq.data && cq.data.indexOf('task_') === 0) {
       const idx = parseInt(cq.data.split('_')[1], 10);
       const t = tasks[idx];
       if (!t) return;
+      
+      // Pre-set the proof state so if they just type, it works
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
+      
       return bot.sendMessage(uid,
-        '📋 <b>' + esc(t.n) + '</b>\n\n🔗 ' + esc(t.l) + '\n\n' +
+        '📋 <b>' + esc(t.n) + '</b>\n\n' +
         (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') +
-        '📸 Now send your proof (screenshot or text):',
+        '1️⃣ Click "🔗 Open Task" to complete it.\n' +
+        '2️⃣ Click "📸 Submit Proof" and send your screenshot or text.',
+        { 
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔗 Open Task', url: t.l }],
+              [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]
+            ]
+          }        }
+      ).catch(() => {});
+    }
+
+    // ✅ NEW: Explicit "Submit Proof" button handler
+    if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {
+      const idx = parseInt(cq.data.split('_')[2], 10);
+      const t = tasks[idx];
+      if (!t) return;
+      
+      // Ensure state is set
+      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
+      
+      return bot.sendMessage(uid, 
+        '📸 <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', 
         { parse_mode: 'HTML' }
       ).catch(() => {});
     }
 
     if (cq.data && (cq.data.indexOf('approve_') === 0 || cq.data.indexOf('decline_') === 0)) {
       const approve = cq.data.indexOf('approve_') === 0;
-      const pid = cq.data.split('_')[1];      const ref = db.collection('bots').doc(botId).collection('proofs').doc(pid);
+      const pid = cq.data.split('_')[1];
+      const ref = db.collection('bots').doc(botId).collection('proofs').doc(pid);
       const doc = await ref.get();
       if (doc.exists) {
         const p = doc.data();
@@ -564,8 +586,7 @@ function startBot(cfgIn) {
       if (msg.photo) {
         await notifyPayout(caption, btns);
         await bot.sendPhoto(normchan(payout), msg.photo[msg.photo.length - 1].file_id, { caption: 'Proof from ' + uid }).catch(() => {});
-      } else {
-        await notifyPayout(caption, btns);
+      } else {        await notifyPayout(caption, btns);
       }
       bot.sendMessage(uid, '✅ Proof sent for review!', { parse_mode: 'HTML' }).catch(() => {});
     } catch (e) {
@@ -586,6 +607,7 @@ function startBot(cfgIn) {
       { parse_mode: 'HTML', disable_web_page_preview: true }
     ).catch(() => {});
   }
+
   async function handleInvite(uid, got) {
     const me = await bot.getMe();
     await bot.sendMessage(uid,
@@ -613,8 +635,7 @@ function startBot(cfgIn) {
     if (pay === 'AutoPay2') out += '📬 Delivery: <b>Your Telegram account</b> (xRocket)\n\n';
     else out += '🏦 Wallet:\n<code>' + esc(wallet) + '</code>\n\n';
     if (txHash) out += '💳 Transaction:\n<code>' + esc(txHash) + '</code>\n\n';
-    out += '💰 Remaining Balance:\n<b>' + newBalance.toFixed(2) + ' ' + esc(currency) + '</b>';
-    if (!paid) out += '\n\n<i>⏳ Owner will process your payment soon.</i>';
+    out += '💰 Remaining Balance:\n<b>' + newBalance.toFixed(2) + ' ' + esc(currency) + '</b>';    if (!paid) out += '\n\n<i>⏳ Owner will process your payment soon.</i>';
     return out;
   }
 
@@ -635,7 +656,8 @@ function startBot(cfgIn) {
       '⏳ <b>Processing withdrawal...</b>\n\n' +
       '💰 Requested: <b>' + amount + ' ' + esc(currency) + '</b>\n\n' +
       (feeAmount > 0 ? '💳 Fee: <b>' + feeAmount + ' ' + esc(currency) + '</b>\n\n' : '') +
-      '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +      walletLine,
+      '📤 You will receive: <b>' + receivedAmount + ' ' + esc(currency) + '</b>\n\n' +
+      walletLine,
       { parse_mode: 'HTML' }
     ).catch(() => {});
 
@@ -662,8 +684,7 @@ function startBot(cfgIn) {
       }
     }
 
-    if (pay === 'AutoPay2') {
-      if (!isAutoPayCoin(currency)) {
+    if (pay === 'AutoPay2') {      if (!isAutoPayCoin(currency)) {
         return bot.sendMessage(uid, '❌ <b>AutoPay2 does not support ' + esc(currency) + '</b>\n\nOnly these coins support auto payment:\n' + AUTO_PAY_COINS.join(', ') + '\n\nPlease switch to Manual payment or use a supported coin.', { parse_mode: 'HTML' }).catch(() => {});
       }
 
@@ -684,7 +705,8 @@ function startBot(cfgIn) {
         const newBalance = Number(got.data.balance || 0) - amount;
         return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, 'telegram', payoutId, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
-        const err = providerError(e, 'xRocket payment failed');        console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
+        const err = providerError(e, 'xRocket payment failed');
+        console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
         await logWithdraw(uid, amount, 'failed', 'telegram', null, feeAmount, receivedAmount, { provider: 'xRocket', error: err });
         await notifyPayout('❌ <b>AutoPay2 FAILED</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + '\n\n⚠️ ' + esc(err).slice(0, 300));
         return bot.sendMessage(uid, '❌ <b>Payment failed</b>\n\n⚠️ ' + esc(err).slice(0, 250) + '\n\n💰 Balance NOT deducted.', { parse_mode: 'HTML' }).catch(() => {});
@@ -711,8 +733,7 @@ function startBot(cfgIn) {
       bot.sendMessage(uid, receipt('PENDING', amount, feeAmount, receivedAmount, got.data.wallet, '', newBalance, false), { parse_mode: 'HTML' }).catch(() => {});
     } catch (e) {
       console.log(`[engine:${botId}] ❌ Manual withdraw error: ${e.message}`);
-      bot.sendMessage(uid, '❌ Error processing withdrawal. Try again.', { parse_mode: 'HTML' }).catch(() => {});
-    }
+      bot.sendMessage(uid, '❌ Error processing withdrawal. Try again.', { parse_mode: 'HTML' }).catch(() => {});    }
   }
 }
 
@@ -733,7 +754,8 @@ async function restartBot(botId) {
     const cfg = Object.assign({ id: snap.id }, snap.data());
     if (cfg.status === 'active') startBot(cfg);
   } catch (e) {
-    console.error(`[engine:${botId}] ❌ restart error: ${e.message}`);  }
+    console.error(`[engine:${botId}] ❌ restart error: ${e.message}`);
+  }
 }
 
 async function loadAllBots() {
@@ -760,8 +782,7 @@ setInterval(async () => {
     for (const doc of snap.docs) {
       if (!activeBots[doc.id]) {
         console.log(`[engine:heal] 🩹 restarting missing bot ${doc.id}`);
-        startBot(Object.assign({ id: doc.id }, doc.data()));
-        healed++;
+        startBot(Object.assign({ id: doc.id }, doc.data()));        healed++;
         await new Promise(r => setTimeout(r, 800));
       }
     }
