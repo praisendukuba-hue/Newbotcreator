@@ -208,7 +208,7 @@ async function startBot(cfgIn) {
   let botDetect = !!cfg.botDetect;
   let name = cfg.name || 'Rewards Bot';
   let fee = Number(cfg.withdrawFee || 0);
-  let taskProofChannel = cfg.taskProofChannel || ''; // ✅ NEW: Task Proof Channel
+  let taskProofChannel = cfg.taskProofChannel || '';
 
   console.log(`[engine:${botId}] ✅ STARTED (${name}) · ${currency} · ${pay} · detect:${botDetect} · fee:${fee}`);
 
@@ -269,7 +269,7 @@ async function startBot(cfgIn) {
       botDetect = d.botDetect === true;
       name = d.name || name;
       fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);
-      taskProofChannel = d.taskProofChannel || taskProofChannel; // ✅ Refresh task proof channel
+      taskProofChannel = d.taskProofChannel || taskProofChannel;
       return true;
     } catch (e) { console.log(`[engine:${botId}] refreshCfg error: ${e.message}`); return true; }
   }
@@ -303,18 +303,16 @@ async function startBot(cfgIn) {
     bot.sendMessage(uid, (wrong ? '❌ Wrong answer!\n\nTry again:\n\n' : '🤖 <b>ARE YOU A ROBOT?</b>\n\nProve you are human first:\n\n') + '🧮 <b>' + a + ' + ' + b + ' = ?</b>\n\n👉 Send your answer:', { parse_mode: 'HTML' }).catch(() => {});
   }
 
+  // ✅ FIX: Channel buttons now say "Join" instead of "Ch 1", "Ch 2", etc.
   async function showChannels(uid) {
     const allChannels = [];
     allChannels.push({ text: '💼 Official', url: OFFICIAL_URL });
     
-    let channelNum = 1;
     for (const ch of mustJoin) { 
-      allChannels.push({ text: `📢 Ch ${channelNum}`, url: chanUrl(ch) }); 
-      channelNum++; 
+      allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); 
     }
     for (const ch of nonMust) { 
-      allChannels.push({ text: `📢 Ch ${channelNum}`, url: chanUrl(ch) }); 
-      channelNum++; 
+      allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); 
     }
     if (payout) {
       allChannels.push({ text: '💰 Payment', url: chanUrl(payout) });
@@ -341,9 +339,9 @@ async function startBot(cfgIn) {
     if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned from this bot.</b>', { parse_mode: 'HTML' }).catch(() => {});
     if (got.isNew) await db.collection('bots').doc(botId).update({ users: FieldValue.increment(1) }).catch(() => {});
     await db.collection('bots').doc(botId).update({ lastActive: Date.now() }).catch(() => {});
+
     const refId = match && match[1] ? match[1] : null;
-    if (refId && refId !== String(uid) && !got.data.refer) {
-      await got.ref.update({ refer: refId }).catch(() => {});
+    if (refId && refId !== String(uid) && !got.data.refer) {      await got.ref.update({ refer: refId }).catch(() => {});
       await db.collection('bots').doc(botId).collection('users').doc(refId).update({ balance: FieldValue.increment(refB), refs: FieldValue.increment(1) }).catch(() => {});
       bot.sendMessage(refId, '🎁 You earned <b>' + refB + ' ' + esc(currency) + '</b> for a new referral!', { parse_mode: 'HTML' }).catch(() => {});
     }
@@ -390,9 +388,9 @@ async function startBot(cfgIn) {
     if (txt === '👛 Wallet' && (pay === 'Manual' || pay === 'AutoPay1')) {
       setA(key, 'wallet');
       return bot.sendMessage(uid, '👛 Current wallet:\n<code>' + esc(got.data.wallet) + '</code>\n\n📝 Send your new wallet address:', { parse_mode: 'HTML' }).catch(() => {});
-    }    if (txt === '💸 Withdraw') {
-      if (!minW || !maxW || !payout) return bot.sendMessage(uid, '⚠️ Bot owner has not finished setup yet. Try later.').catch(() => {});
-      if ((pay === 'Manual' || pay === 'AutoPay1') && (!got.data.wallet || got.data.wallet === 'Not Set')) {
+    }
+    if (txt === '💸 Withdraw') {
+      if (!minW || !maxW || !payout) return bot.sendMessage(uid, '⚠️ Bot owner has not finished setup yet. Try later.').catch(() => {});      if ((pay === 'Manual' || pay === 'AutoPay1') && (!got.data.wallet || got.data.wallet === 'Not Set')) {
         return bot.sendMessage(uid, '⚠️ Set your wallet first: tap <b>👛 Wallet</b>', { parse_mode: 'HTML' }).catch(() => {});
       }
       setA(key, 'withdraw');
@@ -439,9 +437,9 @@ async function startBot(cfgIn) {
 
     if (cq.data && cq.data.indexOf('task_') === 0) {
       const idx = parseInt(cq.data.split('_')[1], 10);
-      const t = tasks[idx];      if (!t) return;
-      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click "🔗 Open Task" to complete it.\n2️⃣ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
+      const t = tasks[idx];
+      if (!t) return;
+      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });      return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click "🔗 Open Task" to complete it.\n2️⃣ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
     }
 
     if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {
@@ -452,14 +450,13 @@ async function startBot(cfgIn) {
       return bot.sendMessage(uid, '📸 <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});
     }
 
-    // ✅ SECURITY CHECK: Only channel admins can approve/decline task proofs
+    // ✅ SECURITY CHECK & AUTO-DELETE: Only channel admins can approve/decline, and the message disappears instantly
     if (cq.data && (cq.data.startsWith('ap_prf_') || cq.data.startsWith('dec_prf_'))) {
       const isApprove = cq.data.startsWith('ap_prf_');
       const parts = cq.data.split('_');
       const proofUid = parts[2];
       const reward = parseFloat(parts[3]) || 0;
       
-      // Check if the person clicking is an admin or creator of the channel
       const chatId = cq.message.chat.id;
       const clickerId = cq.from.id;
       
@@ -472,7 +469,7 @@ async function startBot(cfgIn) {
           });
         }
       } catch (e) {
-        // If it's a private chat (fallback), we allow it (assuming the owner is checking their DMs)
+        // If it's a private chat (fallback), we allow it
       }
 
       const msgText = cq.message.text || cq.message.caption || '';
@@ -488,23 +485,32 @@ async function startBot(cfgIn) {
         }).catch(() => {});
         
         bot.sendMessage(proofUid, `✅ <b>APPROVED!</b>\n\n🎁 You earned <b>${reward} ${esc(currency)}</b> for: ${esc(taskName)}`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.editMessageText(`✅ <b>APPROVED</b>\n\n👤 User: <code>${proofUid}</code>\n📋 Task: ${esc(taskName)}\n💰 Reward: ${reward}`, { chat_id: cq.message.chat.id, message_id: cq.message.message_id, parse_mode: 'HTML' });      } else {
+        
+        // ✅ FIX: Answer callback to remove loading spinner, then DELETE the message from the channel
+        await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});
+        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});        
+      } else {
         await userRef.update({ 
           completedTasks: FieldValue.arrayUnion(taskName)
         }).catch(() => {});
         
         bot.sendMessage(proofUid, `❌ <b>Your proof for "${esc(taskName)}" was declined.</b>`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.editMessageText(`❌ <b>DECLINED</b>\n\n👤 User: <code>${proofUid}</code>\n📋 Task: ${esc(taskName)}`, { chat_id: cq.message.chat.id, message_id: cq.message.message_id, parse_mode: 'HTML' });
+        
+        // ✅ FIX: Answer callback to remove loading spinner, then DELETE the message from the channel
+        await bot.answerCallbackQuery(cq.id, { text: '❌ Declined & deleted' }).catch(() => {});
+        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
       }
     }
   }));
 
-  // ✅ UPDATED: Send proof to Task Proof Channel (with Payout channel as fallback)
+  // ✅ UPDATED: Normalize channel names/URLs to prevent "chat not found" errors
   async function saveProof(uid, msg, taskName, reward) {
     try {
       const hasPhoto = msg.photo && msg.photo.length > 0;
-      const primaryTarget = taskProofChannel;
-      const fallbackTarget = payout;
+      
+      // ✅ FIX: Normalize the channel names/URLs to proper @username or numeric ID
+      const primaryTarget = normchan(taskProofChannel);
+      const fallbackTarget = normchan(payout);
       
       const caption = `🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n👤 User ID: <code>${uid}</code>\n📝 ${esc(msg.text || '(photo sent)')}`;
       const btns = { 
@@ -518,7 +524,7 @@ async function startBot(cfgIn) {
       };
 
       const sendProof = async (targetId, isFallback) => {
-        if (!targetId) throw new Error('No target ID provided');
+        if (!targetId) throw new Error('No target channel ID provided');
         const finalCaption = isFallback ? caption + `\n\n⚠️ (Sent to fallback: ${targetId})` : caption;
         if (hasPhoto) {
           await bot.sendPhoto(targetId, msg.photo[msg.photo.length - 1].file_id, { caption: finalCaption, ...btns });
@@ -531,20 +537,30 @@ async function startBot(cfgIn) {
         await sendProof(primaryTarget, false);
         bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
-        console.warn(`[engine:${botId}] saveProof to primary target (${primaryTarget}) failed: ${e.message}. Trying fallback...`);
-        if (fallbackTarget && fallbackTarget !== primaryTarget) {
+        console.warn(`[engine:${botId}] saveProof to primary target (${primaryTarget}) failed: ${e.message}. Trying fallback...`);        if (fallbackTarget && fallbackTarget !== primaryTarget) {
           try {
             await sendProof(fallbackTarget, true);
             bot.sendMessage(uid, '✅ Proof sent to payout channel (fallback) for review!', { parse_mode: 'HTML' }).catch(() => {});
           } catch (e2) {
-            throw new Error(`Both primary and fallback failed.`);          }
+            throw new Error(`Both primary and fallback failed.`);
+          }
         } else {
           throw e;
         }
       }
     } catch (e) {
       console.error(`[engine:${botId}] saveProof completely failed:`, e.message);
-      bot.sendMessage(uid, '❌ Failed to send proof. Please ensure the bot is an admin in the Task Proof Channel.', { parse_mode: 'HTML' }).catch(() => {});
+      
+      let errorMsg = '❌ Failed to send proof.';
+      if (e.message.includes('Chat not found') || e.message.includes('chat_id is invalid') || e.message.includes('chat not found')) {
+        errorMsg = '❌ Channel not found. Please use the exact @username (e.g., @degreatboost) or the numeric ID (e.g., -1001234567890) in the settings.';
+      } else if (e.message.includes('Forbidden') || e.message.includes('bot is not a member')) {
+        errorMsg = '❌ Bot is not an admin in this channel. Please add it as an Administrator with "Send Messages" permission.';
+      } else {
+        errorMsg = `❌ Failed: ${e.message}`;
+      }
+      
+      bot.sendMessage(uid, errorMsg, { parse_mode: 'HTML' }).catch(() => {});
     }
   }
 
@@ -570,8 +586,7 @@ async function startBot(cfgIn) {
     const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];
     if (!Array.isArray(tasks) || tasks.length === 0) return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
     const rows = taskRows(completed);
-    await bot.sendMessage(uid, '📋 <b>TASKS</b>\n\nTap a task to complete it:', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
-  }
+    await bot.sendMessage(uid, '📋 <b>TASKS</b>\n\nTap a task to complete it:', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});  }
 
   function receipt(status, amount, feeAmount, receivedAmount, wallet, txHash, newBalance, paid) {
     let out = '';
@@ -587,6 +602,7 @@ async function startBot(cfgIn) {
     if (!paid) out += '\n\n<i>⏳ Owner will process your payment soon.</i>';
     return out;
   }
+
   async function handleWithdrawAmount(uid, raw, got) {
     const amount = parseFloat(raw);
     if (isNaN(amount)) return bot.sendMessage(uid, '❌ Numbers only.').catch(() => {});
@@ -620,7 +636,6 @@ async function startBot(cfgIn) {
         return bot.sendMessage(uid, '❌ <b>Payment failed</b>\n\n⚠️ ' + esc(err).slice(0, 250) + '\n\n💰 Balance NOT deducted.', { parse_mode: 'HTML' }).catch(() => {});
       }
     }
-
     if (pay === 'AutoPay2') {
       if (!isAutoPayCoin(currency)) return bot.sendMessage(uid, '❌ <b>AutoPay2 does not support ' + esc(currency) + '</b>\n\nOnly these coins support auto payment:\n' + AUTO_PAY_COINS.join(', ') + '\n\nPlease switch to Manual payment or use a supported coin.', { parse_mode: 'HTML' }).catch(() => {});
       let payoutId = '';
@@ -635,7 +650,8 @@ async function startBot(cfgIn) {
         await got.ref.update({ balance: FieldValue.increment(-amount) });
         await logWithdraw(uid, amount, 'paid', 'telegram', payoutId, feeAmount, receivedAmount, { provider: 'xRocket', providerStatus: 'finished', clientPayoutId: result.clientPayoutId });
         await notifyPayout('✅ <b>AutoPay2 PAID</b>\n\n👤 User ID: <code>' + uid + '</code>\n\n💰 ' + amount + ' ' + esc(currency) + ' (received ' + receivedAmount + ')' + (payoutId ? '\n\n💳 Payout ID: <code>' + esc(payoutId) + '</code>' : ''));
-        const newBalance = Number(got.data.balance || 0) - amount;        return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, 'telegram', payoutId, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
+        const newBalance = Number(got.data.balance || 0) - amount;
+        return bot.sendMessage(uid, receipt('PAID', amount, feeAmount, receivedAmount, 'telegram', payoutId, newBalance, true), { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
         const err = providerError(e, 'xRocket payment failed');
         console.log(`[engine:${botId}] ❌ AutoPay2 ERROR: ${err}`);
@@ -668,7 +684,6 @@ async function restartBot(botId) {
     if (cfg.status === 'active') await startBot(cfg);
   } catch (e) { console.error(`[engine:${botId}] ❌ restart error: ${e.message}`); }
 }
-
 async function loadAllBots() {
   try {
     const snap = await db.collection('bots').where('status', '==', 'active').get();
@@ -685,6 +700,7 @@ async function loadAllBots() {
     console.log('[engine] ✅ all bots live');
   } catch (e) { console.error('[engine] ❌ loadAllBots error:', e.message); }
 }
+
 setInterval(async () => {
   try {
     const snap = await db.collection('bots').where('status', '==', 'active').get();
