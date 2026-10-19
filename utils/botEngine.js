@@ -47,7 +47,7 @@ function getPTConfig(cur) {
   const bscGateway = 'https://pt-kappa-ten.vercel.app';
   
   if (c === 'ton') return { url: tonGateway + '/pay/ton', type: 'ton', blockchain: 'TON' };
-  if (c === 'not') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'NOT', blockchain: 'TON' };  if (c === 'dogs') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'DOGS', blockchain: 'TON' };
+  if (c === 'not') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'NOT', blockchain: 'TON' };    if (c === 'dogs') return { url: tonGateway + '/pay/jetton', type: 'jetton', symbol: 'DOGS', blockchain: 'TON' };
   if (c === 'usdt') return { url: bscGateway + '/pay/bep20', type: 'bep20', symbol: 'USDT', tokenAddress: '0x55d398326f99059fF775485246999027B3197955', blockchain: 'BSC' };
   if (c === 'usdc') return { url: bscGateway + '/pay/bep20', type: 'bep20', symbol: 'USDC', tokenAddress: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', blockchain: 'BSC' };
   if (c === 'bnb') return { url: bscGateway + '/pay/bnb', type: 'bnb', blockchain: 'BSC' };
@@ -96,7 +96,8 @@ function providerError(error, fallback) {
 function setA(key, type, extra) {
   awaiting[key] = Object.assign({ type: type, exp: Date.now() + 300000 }, extra || {});
 }
-function getA(key) {  const a = awaiting[key];
+function getA(key) {  
+  const a = awaiting[key];
   if (!a) return null;
   if (Date.now() > a.exp) { delete awaiting[key]; return null; }
   return a;
@@ -144,8 +145,8 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
   console.log(`[engine:${botId}] AutoPay1 request: ${currency} (${ptConfig.blockchain}) → ${wallet} (${amount})`);
   const response = await axios.post(ptConfig.url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true });
   const d = response.data || {};
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  }
+  if (response.status < 200 || response.status >= 300) {    throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  
+  }
   const txHash = d.tx_hash || d.txHash || d.hash || d.transaction || d.transactionHash || d.tx || d.id || '';
   const success = d.success === true || d.ok === true || d.status === 'success' || d.status === 'completed' || d.status === 'paid' || !!txHash;
   if (!success) throw new Error(String(d.message || d.error || d.detail || 'PT Exchange rejected').slice(0, 300));
@@ -173,43 +174,76 @@ async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, descri
   throw new Error('xRocket returned unknown status: ' + (d.status || 'missing'));
 }
 
-// ✅ NEW: VTU API PAYMENT FUNCTION (Airtime/Data)
-async function sendVtuPayment({ botId, vtuApiKey, network, phone, amount, type }) {
-  if (!vtuApiKey) throw new Error('VTU API key is missing.');
+// ✅ UPDATED: VTU.ng API PAYMENT FUNCTION (Airtime/Data)
+async function sendVtuPayment({ botId, vtuCredentials, network, phone, amount, type, variationId }) {
+  if (!vtuCredentials) throw new Error('VTU credentials are missing. Format must be: username:password');
   
-  // ⚠️ REPLACE THIS WITH YOUR ACTUAL VTU PROVIDER API ENDPOINT
-  // Example using a generic VTU API structure
-  const vtuUrl = 'https://your-vtu-provider.com/api/topup'; 
-  
-  const payload = {
-    api_key: vtuApiKey,
-    network: network, // e.g., 'MTN', 'GLO'
-    phone: phone,
-    amount: parseFloat(amount),
-    type: type // 'airtime' or 'data'
+  let username, password;
+  if (String(vtuCredentials).includes(':')) {
+    [username, password] = String(vtuCredentials).split(':', 2);
+  } else {
+    throw new Error('VTU credentials must be in format username:password');
+  }
+
+  // 1. Obtain JWT Token
+  const authResponse = await axios.post('https://vtu.ng/wp-json/jwt-auth/v1/token', {
+    username: username.trim(),
+    password: password.trim()
+  }, { timeout: 15000, validateStatus: () => true });
+
+  const authData = authResponse.data || {};
+  if (authResponse.status < 200 || authResponse.status >= 300 || !authData.token) {
+    throw new Error('VTU Auth failed: ' + (authData.message || authData.code || 'Invalid credentials'));
+  }
+  const token = authData.token;
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
   };
 
-  console.log(`[engine:${botId}] VTU request: ${type} ${network} → ${phone} (${amount})`);
+  const requestId = `CLUR-${botId}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const serviceId = String(network || '').toLowerCase().replace(/[^a-z0-9]/g, ''); // e.g., 'mtn', 'airtel', 'glo', '9mobile'
   
-  // ⚠️ UNCOMMENT AND ADJUST BASED ON YOUR VTU PROVIDER
-  /*
-  const response = await axios.post(vtuUrl, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true });
-  const d = response.data || {};  if (response.status < 200 || response.status >= 300) {
-    throw new Error(String(d.message || d.error || 'HTTP ' + response.status).slice(0, 300));
+  let payload = {
+    request_id: requestId,
+    phone: String(phone).trim()
+  };
+
+  let apiUrl = '';
+  if (type === 'airtime') {
+    payload.service_id = serviceId;
+    payload.amount = Math.round(parseFloat(amount)); // VTU expects Integer for airtime
+    apiUrl = 'https://vtu.ng/wp-json/api/v2/airtime';
+  } else if (type === 'data') {
+    payload.service_id = serviceId;
+    if (!variationId) throw new Error('Data variation ID is required but not configured in bot settings.');
+    payload.variation_id = String(variationId).trim();
+    apiUrl = 'https://vtu.ng/wp-json/api/v2/data';
+  } else {
+    throw new Error('Unsupported VTU type: ' + type);
   }
-  if (!d.success && d.status !== 'success') throw new Error(String(d.message || 'VTU rejected').slice(0, 300));
-  return { success: true, data: d };
-  */
+
+  console.log(`[engine:${botId}] VTU ${type} request: ${serviceId} → ${phone} (${amount})`);
   
-  // For now, returning success for testing
-  return { success: true, data: { message: 'VTU payment simulated' } };
+  const response = await axios.post(apiUrl, payload, { headers, timeout: 30000, validateStatus: () => true });
+  const d = response.data || {};
+  
+  if (response.status < 200 || response.status >= 300 || d.code !== 'success') {
+    throw new Error(String(d.message || d.code || 'HTTP ' + response.status).slice(0, 300));
+  }
+
+  const orderStatus = d.data?.status || '';
+  if (orderStatus === 'completed-api' || orderStatus === 'processing-api') {
+    return { success: true, data: d.data, status: orderStatus, orderId: d.data.order_id };
+  }
+  
+  throw new Error('VTU order failed or refunded: ' + (d.message || orderStatus));
 }
 
 async function stopBot(botId) {
   const info = activeBots[botId];
   if (!info) return;
-  try { await info.bot.stopPolling(); } catch (e) { console.log(`[engine:${botId}] stopPolling error:`, e.message); }
-  try { delete tokenOwner[info.cfg.token]; } catch (e) {}
+  try { await info.bot.stopPolling(); } catch (e) { console.log(`[engine:${botId}] stopPolling error:`, e.message); }  try { delete tokenOwner[info.cfg.token]; } catch (e) {}
   delete activeBots[botId];
   console.log(`[engine:${botId}] ⏹ stopped and polling terminated`);
 }
@@ -234,7 +268,8 @@ async function startBot(cfgIn) {
   let refB = Number(cfg.refBonus || 0);
   let payout = cfg.payoutChannel || '';
   let apiKey = cfg.apiKey || '';
-  let vtuApiKey = cfg.vtuApiKey || ''; // ✅ NEW
+  let vtuApiKey = cfg.vtuApiKey || ''; // ✅ NEW (Format: username:password)
+  let dataVariationId = cfg.dataVariationId || ''; // ✅ NEW (Required for Data withdrawals)
   let requireApproval = cfg.requireApproval === true; // ✅ NEW
   let botNetwork = cfg.network || 'All'; // ✅ NEW
   let mustJoin = (cfg.mustJoin || []).slice(0, 10);
@@ -257,8 +292,7 @@ async function startBot(cfgIn) {
       try { await bot.getMe(); return; } catch (err) {
         if (isAuthError(err)) return deactivate('Token invalid or deleted from BotFather');
         console.log(`[engine:${botId}] getMe attempt ${attempt}/3 failed (network): ${String(err.message || err).slice(0, 100)}`);
-        await new Promise(r => setTimeout(r, 3000 * attempt));
-      }
+        await new Promise(r => setTimeout(r, 3000 * attempt));      }
     }
     console.log(`[engine:${botId}] ⚠️ Could not verify token after 3 attempts.`);
   })();
@@ -292,12 +326,14 @@ async function startBot(cfgIn) {
         console.log(`[engine:${botId}] Status changed to: ${d.status}. Stopping...`); await stopBot(botId); return false; 
       }
       currency = d.currency || currency;
-      pay = normalizePayMethod(d.payMethod || pay);      minW = Number(d.minW != null ? d.minW : minW);
+      pay = normalizePayMethod(d.payMethod || pay);      
+      minW = Number(d.minW != null ? d.minW : minW);
       maxW = Number(d.maxW != null ? d.maxW : maxW);
       refB = Number(d.refBonus != null ? d.refBonus : refB);
       payout = d.payoutChannel || payout;
       apiKey = d.apiKey || apiKey;
       vtuApiKey = d.vtuApiKey || vtuApiKey; // ✅ NEW
+      dataVariationId = d.dataVariationId || dataVariationId; // ✅ NEW
       requireApproval = d.requireApproval === true; // ✅ NEW
       botNetwork = d.network || botNetwork; // ✅ NEW
       mustJoin = (d.mustJoin || []).slice(0, 10);
@@ -305,8 +341,7 @@ async function startBot(cfgIn) {
       tasks = Array.isArray(d.tasks) ? d.tasks : tasks;
       botDetect = d.botDetect === true;
       name = d.name || name;
-      fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);
-      taskProofChannel = d.taskProofChannel || taskProofChannel;
+      fee = Number(d.withdrawFee != null ? d.withdrawFee : fee);      taskProofChannel = d.taskProofChannel || taskProofChannel;
       return true;
     } catch (e) { console.log(`[engine:${botId}] refreshCfg error: ${e.message}`); return true; }
   }
@@ -341,7 +376,8 @@ async function startBot(cfgIn) {
     bot.sendMessage(uid, (wrong ? ' Wrong answer!\n\nTry again:\n\n' : '🤖 <b>ARE YOU A ROBOT?</b>\n\nProve you are human first:\n\n') + '🧮 <b>' + a + ' + ' + b + ' = ?</b>\n\n👉 Send your answer:', { parse_mode: 'HTML' }).catch(() => {});
   }
 
-  async function showChannels(uid) {    const allChannels = [];
+  async function showChannels(uid) {    
+    const allChannels = [];
     allChannels.push({ text: '💼 Official', url: OFFICIAL_URL });
     for (const ch of mustJoin) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
     for (const ch of nonMust) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
@@ -354,7 +390,6 @@ async function startBot(cfgIn) {
     const welcomeMsg = ' <b>Welcome to ' + esc(name) + '!</b>\n\nHere\'s how it works:\n• Invite friends using your unique link\n• Earn ' + esc(currency) + ' for every friend who joins\n• Withdraw your earnings anytime\n\n👉 <i>First, join our channels:</i>\n\n Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
     await bot.sendMessage(uid, welcomeMsg, { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
   }
-
   bot.onText(/\/start(?:\s+(\d+))?/, safe(async (msg, match) => {
     const uid = msg.chat.id;
     const key = botId + ':' + uid;
@@ -390,7 +425,8 @@ async function startBot(cfgIn) {
     const got = await getUser(botId, uid);
     if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
 
-    const st = getA(key);    if (st) {
+    const st = getA(key);    
+    if (st) {
       delete awaiting[key];
       
       if (st.type === 'captcha') {
@@ -403,8 +439,7 @@ async function startBot(cfgIn) {
       }
       
       if (st.type === 'wallet') {
-        await got.ref.update({ wallet: txt });
-        return bot.sendMessage(uid, '✅ <b>Wallet saved</b>\n\n👛 <code>' + esc(txt) + '</code>', { parse_mode: 'HTML' }).catch(() => {});
+        await got.ref.update({ wallet: txt });        return bot.sendMessage(uid, '✅ <b>Wallet saved</b>\n\n👛 <code>' + esc(txt) + '</code>', { parse_mode: 'HTML' }).catch(() => {});
       }
 
       // ✅ NEW: WITHDRAWAL FLOW STATES
@@ -439,7 +474,8 @@ async function startBot(cfgIn) {
 
       if (st.type === 'withdraw_bank_name') {
         st.bankName = txt;
-        setA(key, 'withdraw_bank_acct', st);        return bot.sendMessage(uid, '🔢 <b>Enter Account Number</b>\n\nExample: 0123456789', { parse_mode: 'HTML' }).catch(() => {});
+        setA(key, 'withdraw_bank_acct', st);        
+        return bot.sendMessage(uid, '🔢 <b>Enter Account Number</b>\n\nExample: 0123456789', { parse_mode: 'HTML' }).catch(() => {});
       }
 
       if (st.type === 'withdraw_bank_acct') {
@@ -453,7 +489,6 @@ async function startBot(cfgIn) {
         st.details = `Bank: ${st.bankName}, Acct: ${st.bankAcct}, Name: ${st.bankNameFull}`;
         return processWithdrawal(uid, st, got);
       }
-
       if (st.type === 'withdraw_network') {
         // Handled by callback_query
         return;
@@ -488,7 +523,8 @@ async function startBot(cfgIn) {
     }
   }));
 
-  bot.on('callback_query', safe(async (cq) => {    const uid = cq.from.id;
+  bot.on('callback_query', safe(async (cq) => {    
+    const uid = cq.from.id;
     const key = botId + ':' + uid;
 
     if (cq.data === 'continue') {
@@ -501,8 +537,7 @@ async function startBot(cfgIn) {
         }
         if (m.status === 'left' || m.status === 'kicked') {
           return bot.answerCallbackQuery(cq.id, { text: '❌ Please join ' + ch + ' first!', show_alert: true }).catch(() => {});
-        }
-      }
+        }      }
       await bot.answerCallbackQuery(cq.id, { text: '✅ Channels verified!' }).catch(() => {});
       if (botDetect) {
         const got = await getUser(botId, uid);
@@ -537,7 +572,8 @@ async function startBot(cfgIn) {
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, ' <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    }
+      return bot.sendMessage(uid, ' <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    
+    }
 
     // ✅ NEW: NETWORK SELECTION FOR AIRTIME/DATA
     if (cq.data && cq.data.startsWith('net_')) {
@@ -551,7 +587,6 @@ async function startBot(cfgIn) {
         return bot.sendMessage(uid, ' <b>Enter Phone Number</b>\n\nExample: 08012345678', { parse_mode: 'HTML' }).catch(() => {});
       }
     }
-
     // ✅ SECURITY CHECK & AUTO-DELETE: Only channel admins can approve/decline tasks
     if (cq.data && (cq.data.startsWith('ap_prf_') || cq.data.startsWith('dec_prf_'))) {
       const isApprove = cq.data.startsWith('ap_prf_');
@@ -600,8 +635,7 @@ async function startBot(cfgIn) {
       
       try {
         const member = await bot.getChatMember(chatId, clickerId);
-        if (member.status !== 'creator' && member.status !== 'administrator') {
-          return bot.answerCallbackQuery(cq.id, { text: '️ Only channel admins can approve/decline!', show_alert: true }).catch(() => {});
+        if (member.status !== 'creator' && member.status !== 'administrator') {          return bot.answerCallbackQuery(cq.id, { text: '️ Only channel admins can approve/decline!', show_alert: true }).catch(() => {});
         }
       } catch (e) {}
 
@@ -635,7 +669,8 @@ async function startBot(cfgIn) {
   async function saveProof(uid, msg, taskName, reward) {
     try {
       const hasPhoto = msg.photo && msg.photo.length > 0;
-      const primaryTarget = normchan(taskProofChannel);      const fallbackTarget = normchan(payout);
+      const primaryTarget = normchan(taskProofChannel);      
+      const fallbackTarget = normchan(payout);
       
       const caption = `🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n👤 User ID: <code>${uid}</code>\n ${esc(msg.text || '(photo sent)')}`;
       const btns = { reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ap_prf_${uid}_${reward}` }, { text: '❌ Decline', callback_data: `dec_prf_${uid}_${reward}` }]] }, parse_mode: 'HTML' };
@@ -649,8 +684,7 @@ async function startBot(cfgIn) {
 
       try {
         await sendProof(primaryTarget, false);
-        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
+        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});      } catch (e) {
         if (fallbackTarget && fallbackTarget !== primaryTarget) {
           try { await sendProof(fallbackTarget, true); bot.sendMessage(uid, '✅ Proof sent to payout channel (fallback) for review!', { parse_mode: 'HTML' }).catch(() => {}); }
           catch (e2) { throw new Error(`Both primary and fallback failed.`); }
@@ -684,7 +718,8 @@ async function startBot(cfgIn) {
   async function handleTasks(uid) {
     await refreshCfg();
     const got = await getUser(botId, uid);
-    const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];    if (!Array.isArray(tasks) || tasks.length === 0) return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
+    const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];    
+    if (!Array.isArray(tasks) || tasks.length === 0) return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
     const rows = taskRows(completed);
     await bot.sendMessage(uid, '📋 <b>TASKS</b>\n\nTap a task to complete it:', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
   }
@@ -698,8 +733,7 @@ async function startBot(cfgIn) {
     const details = st.details || st.wallet || 'Unknown';
     
     // Create withdrawal record
-    const wdRef = await db.collection('bots').doc(botId).collection('withdrawals').add({
-      uid: String(uid), amount, fee: feeAmount, received: receivedAmount, currency, status: 'pending', details, at: Date.now()
+    const wdRef = await db.collection('bots').doc(botId).collection('withdrawals').add({      uid: String(uid), amount, fee: feeAmount, received: receivedAmount, currency, status: 'pending', details, at: Date.now()
     });
     const wdKey = wdRef.id;
 
@@ -731,15 +765,24 @@ async function startBot(cfgIn) {
         
         if (currency === 'Airtime' || currency === 'Data') {
           if (vtuApiKey) {
-            const result = await sendVtuPayment({ botId, vtuApiKey, network: st.network, phone: st.phone, amount: cleanReceived, type: currency.toLowerCase() });
+            const result = await sendVtuPayment({ 
+              botId, 
+              vtuCredentials: vtuApiKey, 
+              network: st.network, 
+              phone: st.phone, 
+              amount: cleanReceived, 
+              type: currency.toLowerCase(),
+              variationId: dataVariationId 
+            });
             success = result.success;
-          } else {            throw new Error('VTU API key not set by admin.');
+            txHash = String(result.orderId || '');
+          } else {
+            throw new Error('VTU API credentials not set by admin. Format: username:password');
           }
         } else if (isAutoPayCoin(currency)) {
           if (pay === 'AutoPay1') {
             const result = await sendPTPayment({ botId, apiKey, currency, wallet: st.wallet, amount: cleanReceived, comment: name });
-            success = result.success;
-            txHash = result.txHash;
+            success = result.success;            txHash = result.txHash;
           } else if (pay === 'AutoPay2') {
             const result = await sendXRocketPayment({ botId, apiKey, uid, currency, amount: cleanReceived, description: name });
             success = result.paid;
@@ -782,13 +825,13 @@ async function loadAllBots() {
   try {
     const snap = await db.collection('bots').where('status', '==', 'active').get();
     console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
-    let i = 0;    for (const d of snap.docs) {
+    let i = 0;    
+    for (const d of snap.docs) {
       try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }
       catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
       i++;
       if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
-    }
-    console.log('[engine] ✅ all bots live');
+    }    console.log('[engine] ✅ all bots live');
   } catch (e) { console.error('[engine] ❌ loadAllBots error:', e.message); }
 }
 
