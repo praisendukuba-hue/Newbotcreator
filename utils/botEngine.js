@@ -145,7 +145,7 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
   console.log(`[engine:${botId}] AutoPay1 request: ${currency} (${ptConfig.blockchain}) → ${wallet} (${amount})`);
   const response = await axios.post(ptConfig.url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true });
   const d = response.data || {};
-  if (response.status < 200 || response.status >= 300) {    throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  
+  if (response.status < 200 || response.status >= 300) {        throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  
   }
   const txHash = d.tx_hash || d.txHash || d.hash || d.transaction || d.transactionHash || d.tx || d.id || '';
   const success = d.success === true || d.ok === true || d.status === 'success' || d.status === 'completed' || d.status === 'paid' || !!txHash;
@@ -174,43 +174,48 @@ async function sendXRocketPayment({ botId, apiKey, uid, currency, amount, descri
   throw new Error('xRocket returned unknown status: ' + (d.status || 'missing'));
 }
 
-// ✅ VTU API PAYMENT FUNCTION (Airtime/Data)
+// ✅ UJAYDATA-API PAYMENT FUNCTION (API Key Only - No Webhooks)
 async function sendVtuPayment({ botId, vtuApiKey, network, phone, amount, type, variationId }) {
-  if (!vtuApiKey) throw new Error('VTU API key is missing.');
+  if (!vtuApiKey) throw new Error('Ujaydata API key is missing.');
   
-  const vtuUrl = type === 'data' 
-    ? 'https://vtu.ng/wp-json/api/v2/data' 
-    : 'https://vtu.ng/wp-json/api/v2/airtime';
+  // ⚠️ UPDATE THIS BASE URL IF UJAYDATA PROVIDES A DIFFERENT ONE
+  const baseUrl = 'https://ujaydata-app.com/api/v1'; 
+  const endpoint = type === 'airtime' ? '/buy-airtime' : '/buy-data';
+  const url = baseUrl + endpoint;
   
   const payload = {
     api_key: vtuApiKey,
-    network: String(network || '').toLowerCase(),
+    network: String(network || '').toUpperCase(), // MTN, GLO, AIRTEL, 9MOBILE
     phone: String(phone),
-    amount: parseFloat(amount),
-    type: String(type).toLowerCase()
+    amount: parseFloat(amount)
   };
 
-  if (type === 'data' && variationId) {
-    payload.variation_id = String(variationId);
-  }
-
-  console.log(`[engine:${botId}] VTU request: ${type} ${network} → ${phone} (${amount})`);  
-  const response = await axios.post(vtuUrl, payload, { 
-    headers: { 'Content-Type': 'application/json' }, 
+  console.log(`[engine:${botId}] Ujaydata ${type} request: ${network} → ${phone} (${amount})`);
+  
+  const response = await axios.post(url, payload, { 
+    headers: { 
+      'Content-Type': 'application/json',      'Authorization': 'Bearer ' + vtuApiKey // Standard secure header
+    }, 
     timeout: 30000, 
     validateStatus: () => true 
   });
   
   const d = response.data || {};
+  
   if (response.status < 200 || response.status >= 300) {
     throw new Error(String(d.message || d.error || 'HTTP ' + response.status).slice(0, 300));
   }
   
-  if (!d.success && d.code !== 'success') {
-    throw new Error(String(d.message || 'VTU provider rejected the request').slice(0, 300));
+  // Check for success status
+  if (d.status === 'success' || d.status === 'completed' || d.code === 0 || d.success === true) {
+    return { 
+      success: true, 
+      data: d,
+      ref: d.ref || d.reference || d.id 
+    };
   }
   
-  return { success: true, data: d };
+  throw new Error(String(d.message || 'Ujaydata rejected the request').slice(0, 300));
 }
 
 async function stopBot(botId) {
@@ -238,12 +243,12 @@ async function startBot(cfgIn) {
   let currency = cfg.currency || '';
   let pay = normalizePayMethod(cfg.payMethod || 'Manual');
   let minW = Number(cfg.minW || 0);
-  let maxW = Number(cfg.maxW || 0);
-  let refB = Number(cfg.refBonus || 0);
+  let maxW = Number(cfg.maxW || 0);  let refB = Number(cfg.refBonus || 0);
   let payout = cfg.payoutChannel || '';
   let apiKey = cfg.apiKey || '';
   let vtuApiKey = cfg.vtuApiKey || ''; 
-  let dataVariationId = cfg.dataVariationId || '';   let requireApproval = cfg.requireApproval === true; 
+  let dataVariationId = cfg.dataVariationId || '';   
+  let requireApproval = cfg.requireApproval === true; 
   let botNetwork = cfg.network || 'All'; 
   let mustJoin = (cfg.mustJoin || []).slice(0, 10);
   let nonMust = (cfg.nonMust || []).slice(0, 10);
@@ -287,12 +292,12 @@ async function startBot(cfgIn) {
     else console.log(`[engine:${botId}] error: ${msg}`);
   });
   
-  const safe = (fn) => async function () {
-    try { await fn.apply(null, arguments); } catch (e) { console.error(`[engine:${botId}] handler crashed:`, e.message); console.error(e.stack); }
+  const safe = (fn) => async function () {    try { await fn.apply(null, arguments); } catch (e) { console.error(`[engine:${botId}] handler crashed:`, e.message); console.error(e.stack); }
   };
 
   async function refreshCfg() {
-    try {      const snap = await db.collection('bots').doc(botId).get();
+    try {      
+      const snap = await db.collection('bots').doc(botId).get();
       if (!snap.exists) { console.log(`[engine:${botId}] Bot deleted from DB. Stopping...`); await stopBot(botId); return false; }
       const d = snap.data();
       if (d.status === 'deactivated' || d.status === 'deleted' || d.status === 'paused') { 
@@ -336,12 +341,12 @@ async function startBot(cfgIn) {
       await db.collection('bots').doc(botId).collection('withdrawals').add(
         Object.assign({ uid: String(uid), amount, fee: feeAmount || 0, received: receivedAmount || amount, currency, status, details: details || '-', txHash: txHash || null, at: Date.now() }, extra || {})
       );
-    } catch (e) {}
-  }
+    } catch (e) {}  }
   
   async function getUsername(uid) {
     try { const c = await bot.getChat(uid); return c.username ? '@' + c.username : (c.first_name || ''); } catch (e) { return ''; }
   }
+  
   function askCaptcha(uid, key, wrong) {
     const a = Math.floor(Math.random() * 10) + 1;
     const b = Math.floor(Math.random() * 10) + 1;
@@ -385,12 +390,12 @@ async function startBot(cfgIn) {
   }));
 
   bot.on('message', safe(async (msg) => {
-    const uid = msg.chat.id;
-    const key = botId + ':' + uid;
+    const uid = msg.chat.id;    const key = botId + ':' + uid;
     if (lastMsg[key] === msg.message_id) return;
     lastMsg[key] = msg.message_id;
     
-    const txt = (msg.text || '').trim();    const hasPhoto = msg.photo && msg.photo.length > 0;
+    const txt = (msg.text || '').trim();    
+    const hasPhoto = msg.photo && msg.photo.length > 0;
     
     if (!txt && !hasPhoto) return;
     if (txt.startsWith('/') && !hasPhoto) { delete awaiting[key]; return; }
@@ -434,12 +439,12 @@ async function startBot(cfgIn) {
             return bot.sendMessage(uid, '📶 <b>Select Your Network</b>', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
           } else {
             st.network = botNetwork;
-            setA(key, 'withdraw_phone', st);
-            return bot.sendMessage(uid, ' <b>Enter Phone Number</b>\n\nExample: 08012345678', { parse_mode: 'HTML' }).catch(() => {});
+            setA(key, 'withdraw_phone', st);            return bot.sendMessage(uid, ' <b>Enter Phone Number</b>\n\nExample: 08012345678', { parse_mode: 'HTML' }).catch(() => {});
           }
         } else {
           setA(key, 'withdraw_wallet', st);
-          return bot.sendMessage(uid, '👛 <b>Enter Wallet Address</b>\n\nSend your ' + esc(currency) + ' wallet address:', { parse_mode: 'HTML' }).catch(() => {});        }
+          return bot.sendMessage(uid, '👛 <b>Enter Wallet Address</b>\n\nSend your ' + esc(currency) + ' wallet address:', { parse_mode: 'HTML' }).catch(() => {});        
+        }
       }
 
       if (st.type === 'withdraw_bank_name') {
@@ -483,12 +488,12 @@ async function startBot(cfgIn) {
     if (txt === '🎁 Invite') return handleInvite(uid, got);
     if (txt === '📋 Tasks') return handleTasks(uid);
     if (txt === '👛 Wallet' && (currency !== 'Airtime' && currency !== 'Data')) {
-      setA(key, 'wallet');
-      return bot.sendMessage(uid, ' Current wallet:\n<code>' + esc(got.data.wallet) + '</code>\n\n📝 Send your new wallet address:', { parse_mode: 'HTML' }).catch(() => {});
+      setA(key, 'wallet');      return bot.sendMessage(uid, ' Current wallet:\n<code>' + esc(got.data.wallet) + '</code>\n\n📝 Send your new wallet address:', { parse_mode: 'HTML' }).catch(() => {});
     }
     if (txt === '💸 Withdraw') {
       if (!minW || !maxW || !payout) return bot.sendMessage(uid, '⚠️ Bot owner has not finished setup yet. Try later.').catch(() => {});
-      setA(key, 'withdraw_amount');      return bot.sendMessage(uid, ' <b>WITHDRAW</b>\n\n💰 Enter amount (' + esc(currency) + ')\n⬇️ Min: ' + minW + '  ·  ⬆️ Max: ' + maxW + (fee > 0 ? '\n💳 Fee: ' + fee + ' ' + esc(currency) : ''), { parse_mode: 'HTML' }).catch(() => {});
+      setA(key, 'withdraw_amount');      
+      return bot.sendMessage(uid, ' <b>WITHDRAW</b>\n\n💰 Enter amount (' + esc(currency) + ')\n⬇️ Min: ' + minW + '  ·  ⬆️ Max: ' + maxW + (fee > 0 ? '\n💳 Fee: ' + fee + ' ' + esc(currency) : ''), { parse_mode: 'HTML' }).catch(() => {});
     }
   }));
 
@@ -532,12 +537,12 @@ async function startBot(cfgIn) {
     if (cq.data && cq.data.indexOf('task_') === 0) {
       const idx = parseInt(cq.data.split('_')[1], 10);
       const t = tasks[idx];
-      if (!t) return;
-      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
+      if (!t) return;      setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
       return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click " Open Task" to complete it.\n2️ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
     }
 
-    if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {      const idx = parseInt(cq.data.split('_')[2], 10);
+    if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {      
+      const idx = parseInt(cq.data.split('_')[2], 10);
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
@@ -581,12 +586,12 @@ async function startBot(cfgIn) {
       if (isApprove) {
         await userRef.update({ balance: FieldValue.increment(reward), completedTasks: FieldValue.arrayUnion(taskName) }).catch(() => {});
         bot.sendMessage(proofUid, `✅ <b>APPROVED!</b>\n\n You earned <b>${reward} ${esc(currency)}</b> for: ${esc(taskName)}`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});
-        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});        
+        await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});        
       } else {
         await userRef.update({ completedTasks: FieldValue.arrayUnion(taskName) }).catch(() => {});
         bot.sendMessage(proofUid, `❌ <b>Your proof for "${esc(taskName)}" was declined.</b>`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.answerCallbackQuery(cq.id, { text: ' Declined & deleted' }).catch(() => {});        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
+        await bot.answerCallbackQuery(cq.id, { text: ' Declined & deleted' }).catch(() => {});        
+        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
       }
     }
     
@@ -630,12 +635,12 @@ async function startBot(cfgIn) {
         bot.sendMessage(wdUid, `❌ <b>WITHDRAWAL DECLINED</b>\n\n💰 ${wdAmount} ${esc(currency)} has been refunded to your balance.`, { parse_mode: 'HTML' }).catch(() => {});
         await bot.answerCallbackQuery(cq.id, { text: '❌ Declined & deleted' }).catch(() => {});
         await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
-      }
-    }
+      }    }
   }));
 
   async function saveProof(uid, msg, taskName, reward) {
-    try {      const hasPhoto = msg.photo && msg.photo.length > 0;
+    try {      
+      const hasPhoto = msg.photo && msg.photo.length > 0;
       const primaryTarget = normchan(taskProofChannel);      
       const fallbackTarget = normchan(payout);
       
@@ -679,12 +684,12 @@ async function startBot(cfgIn) {
   function taskRows(completed = []) {
     return tasks.map((t, i) => {
       const isCompleted = completed.includes(t.n);
-      return [{ text: (isCompleted ? '✅ ' : '') + (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: isCompleted ? 'task_completed_' + i : 'task_' + i }];
-    });
+      return [{ text: (isCompleted ? '✅ ' : '') + (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: isCompleted ? 'task_completed_' + i : 'task_' + i }];    });
   }
 
   async function handleTasks(uid) {
-    await refreshCfg();    const got = await getUser(botId, uid);
+    await refreshCfg();    
+    const got = await getUser(botId, uid);
     const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];    
     if (!Array.isArray(tasks) || tasks.length === 0) return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>', { parse_mode: 'HTML' }).catch(() => {});
     const rows = taskRows(completed);
@@ -728,12 +733,13 @@ async function startBot(cfgIn) {
         if (currency === 'Airtime' || currency === 'Data') {
           if (vtuApiKey) {
             const result = await sendVtuPayment({ botId, vtuApiKey, network: st.network, phone: st.phone, amount: cleanReceived, type: currency.toLowerCase(), variationId: dataVariationId });
-            success = result.success;
+            success = result.success;            txHash = result.ref || '';
           } else {            
-            throw new Error('VTU API key not set by admin.');
+            throw new Error('Ujaydata API key not set by admin.');
           }
         } else if (isAutoPayCoin(currency)) {
-          if (pay === 'AutoPay1') {            const result = await sendPTPayment({ botId, apiKey, currency, wallet: st.wallet, amount: cleanReceived, comment: name });
+          if (pay === 'AutoPay1') {            
+            const result = await sendPTPayment({ botId, apiKey, currency, wallet: st.wallet, amount: cleanReceived, comment: name });
             success = result.success;
             txHash = result.txHash;
           } else if (pay === 'AutoPay2') {
@@ -776,13 +782,13 @@ async function restartBot(botId) {
 
 async function loadAllBots() {
   try {
-    const snap = await db.collection('bots').where('status', '==', 'active').get();
-    console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
+    const snap = await db.collection('bots').where('status', '==', 'active').get();    console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
     let i = 0;    
     for (const d of snap.docs) {
       try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }
       catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
-      i++;      if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
+      i++;      
+      if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
     }
     console.log('[engine] ✅ all bots live');
   } catch (e) { console.error('[engine] ❌ loadAllBots error:', e.message); }
