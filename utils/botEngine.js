@@ -194,7 +194,7 @@ async function sendVtuPayment({ botId, vtuApiKey, network, phone, amount, type, 
   
   const response = await axios.post(url, payload, { 
     headers: { 
-      'Content-Type': 'application/json',      'Authorization': 'Bearer ' + vtuApiKey // Standard secure header
+      'Content-Type': 'application/json',      'Authorization': 'Bearer ' + vtuApiKey 
     }, 
     timeout: 30000, 
     validateStatus: () => true 
@@ -623,7 +623,6 @@ async function startBot(cfgIn) {
       
       if (isApprove) {
         await wdRef.update({ status: 'paid', paidAt: Date.now() }).catch(() => {});
-        // ✅ FIXED SYNTAX ERROR HERE: Added missing closing parenthesis for esc()
         bot.sendMessage(wdUid, `✅ <b>WITHDRAWAL APPROVED!</b>\n\n💰 ${wdAmount} ${esc(currency)} has been sent to your ${esc(currency === 'Naira' ? 'Bank Account' : (currency === 'Airtime' || currency === 'Data' ? 'Phone' : 'Wallet'))}.`, { parse_mode: 'HTML' }).catch(() => {});
         await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});
         await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
@@ -635,8 +634,8 @@ async function startBot(cfgIn) {
         bot.sendMessage(wdUid, `❌ <b>WITHDRAWAL DECLINED</b>\n\n💰 ${wdAmount} ${esc(currency)} has been refunded to your balance.`, { parse_mode: 'HTML' }).catch(() => {});
         await bot.answerCallbackQuery(cq.id, { text: '❌ Declined & deleted' }).catch(() => {});
         await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
-      }    }
-  }));
+      }
+    }  }));
 
   async function saveProof(uid, msg, taskName, reward) {
     try {      
@@ -684,8 +683,8 @@ async function startBot(cfgIn) {
   function taskRows(completed = []) {
     return tasks.map((t, i) => {
       const isCompleted = completed.includes(t.n);
-      return [{ text: (isCompleted ? '✅ ' : '') + (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: isCompleted ? 'task_completed_' + i : 'task_' + i }];    });
-  }
+      return [{ text: (isCompleted ? '✅ ' : '') + (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: isCompleted ? 'task_completed_' + i : 'task_' + i }];
+    });  }
 
   async function handleTasks(uid) {
     await refreshCfg();    
@@ -714,12 +713,27 @@ async function startBot(cfgIn) {
     const wdMsg = `📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n🤖 Bot: ${esc(name)}\n\n👤 User ID: <code>${uid}</code>\n\n🧑 User: ${esc(uname || 'no username')}\n\n💰 Requested: <b>${amount} ${esc(currency)}</b>\n\n${feeAmount > 0 ? '💳 Fee: ' + feeAmount + ' ' + esc(currency) + '\n\n' : ''}📤 Pay this user: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n\n Status: <b>PENDING</b>\n\n🕒 ${new Date().toLocaleString()}`;
 
     if (requireApproval) {
-      const btns = { reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }]] }, parse_mode: 'HTML' };
+      // ✅ UPDATED: Two separate buttons - "Earn" (opens this bot) and "Create Bot" (opens creator bot)
+      const currentBotUsername = bot.options.username || 'bot';
+      const btns = { 
+        reply_markup: { 
+          inline_keyboard: [
+            [
+              { text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, 
+              { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }
+            ],
+            [
+              { text: '💰 Earn', url: `https://t.me/${currentBotUsername}` },
+              { text: '🛠️ Create Bot', url: 'https://t.me/Clurbotcreatybot' }
+            ]
+          ] 
+        }, 
+        parse_mode: 'HTML' 
+      };
       try {
         await bot.sendMessage(normchan(payout), wdMsg, btns);
         bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        await got.ref.update({ balance: FieldValue.increment(amount) });
+      } catch (e) {        await got.ref.update({ balance: FieldValue.increment(amount) });
         await wdRef.update({ status: 'failed' });
         bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
       }
@@ -733,7 +747,8 @@ async function startBot(cfgIn) {
         if (currency === 'Airtime' || currency === 'Data') {
           if (vtuApiKey) {
             const result = await sendVtuPayment({ botId, vtuApiKey, network: st.network, phone: st.phone, amount: cleanReceived, type: currency.toLowerCase(), variationId: dataVariationId });
-            success = result.success;            txHash = result.ref || '';
+            success = result.success;
+            txHash = result.ref || '';
           } else {            
             throw new Error('Ujaydata API key not set by admin.');
           }
@@ -767,8 +782,7 @@ async function startBot(cfgIn) {
         bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
-  }
-}
+  }}
 
 async function restartBot(botId) {
   await stopBot(botId);
@@ -782,7 +796,8 @@ async function restartBot(botId) {
 
 async function loadAllBots() {
   try {
-    const snap = await db.collection('bots').where('status', '==', 'active').get();    console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
+    const snap = await db.collection('bots').where('status', '==', 'active').get();
+    console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
     let i = 0;    
     for (const d of snap.docs) {
       try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }
