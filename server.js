@@ -34,7 +34,7 @@ function isAutoPayCoin(currency) {
 
 function normalizeProvider(provider) {
   const p = cleanString(provider).toLowerCase();
-  if (['autopay1', 'ptexchange', 'pt', 'auto pay 1'].includes(p)) return 'AutoPay1';
+  if (['autopay1', 'pt', 'ptexchange', 'btexchange', 'bt'].includes(p)) return 'AutoPay1';
   if (['autopay2', 'xrocket', 'xrocket pay', 'auto pay 2'].includes(p)) return 'AutoPay2';
   if (['manual', 'manual payment'].includes(p)) return 'Manual';
   return p;
@@ -180,21 +180,31 @@ app.put('/api/bot/:id/settings', async (req, res) => {
     if (body.refBonus !== undefined) u.refBonus = parseFloat(body.refBonus);
     if (body.withdrawFee !== undefined) u.withdrawFee = parseFloat(body.withdrawFee) || 0;
     
+    // ✅ FIXED: Strictly handle boolean for requireApproval
+    if (body.requireApproval !== undefined) {
+      u.requireApproval = (body.requireApproval === true || body.requireApproval === 'true');
+    }
+    // ✅ FIXED: Save network selection for Airtime/MB
+    if (body.network !== undefined) {
+      u.network = body.network;
+    }
+
     if (body.payoutChannel !== undefined) u.payoutChannel = body.payoutChannel;
     if (body.taskProofChannel !== undefined) u.taskProofChannel = body.taskProofChannel;
     
     if (body.mustJoin !== undefined) {
       u.mustJoin = typeof body.mustJoin === 'string' ? body.mustJoin.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.mustJoin;
-    }
-    if (body.nonMust !== undefined) {
+    }    if (body.nonMust !== undefined) {
       u.nonMust = typeof body.nonMust === 'string' ? body.nonMust.split(',').map(function(s) { return s.trim(); }).filter(Boolean).slice(0, 10) : body.nonMust;
     }
     if (body.tasks !== undefined) {
       u.tasks = (body.tasks || []).map(function(t) { return { n: t.n, l: t.l, reward: Number(t.reward || 0) }; });    
     }
-    if (body.botDetect !== undefined) u.botDetect = body.botDetect === true;
+    if (body.botDetect !== undefined) u.botDetect = (body.botDetect === true || body.botDetect === 'true');
     if (body.coAdmins !== undefined) {      
-      u.coAdmins = typeof body.coAdmins === 'string' ? body.coAdmins.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : body.coAdmins;    }
+      u.coAdmins = typeof body.coAdmins === 'string' ? body.coAdmins.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : body.coAdmins;
+    }
+    
     await db.collection('bots').doc(req.params.id).update(u);
     await engine.restartBot(req.params.id);
     
@@ -205,11 +215,13 @@ app.put('/api/bot/:id/settings', async (req, res) => {
       saved: {
         withdrawFee: Number(d.withdrawFee || 0),
         botDetect: !!d.botDetect,
+        requireApproval: !!d.requireApproval, // ✅ Return this to frontend so it stays synced
         minW: d.minW,
         maxW: d.maxW,
         refBonus: d.refBonus,
         payoutChannel: d.payoutChannel || '', 
-        taskProofChannel: d.taskProofChannel || ''
+        taskProofChannel: d.taskProofChannel || '',
+        network: d.network || 'All'
       }
     });
   } catch (e) {
@@ -231,8 +243,7 @@ app.delete('/api/bot/:id', async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
-  }
-});
+  }});
 
 app.post('/api/bot/:id/broadcast', async (req, res) => {
   try {
@@ -243,7 +254,8 @@ app.post('/api/bot/:id/broadcast', async (req, res) => {
     const token = doc.data().token;
     const u = await db.collection('bots').doc(req.params.id).collection('users').limit(5000).get();
     let sent = 0, failed = 0;    
-    for (const x of u.docs) {      try {
+    for (const x of u.docs) {
+      try {
         await axios.post('https://api.telegram.org/bot' + token + '/sendMessage', { chat_id: x.id, text: message, parse_mode: 'HTML' }, { timeout: 5000 });
         sent++;
       } catch (e) { failed++; }
@@ -280,8 +292,7 @@ app.post('/api/admin/broadcast', async (req, res) => {
   }
 });
 
-app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
-  try {
+app.post('/api/bot/:id/users/:uid/update', async (req, res) => {  try {
     const body = req.body;
     const ref = db.collection('bots').doc(req.params.id).collection('users').doc(String(req.params.uid));
     const u = {};
@@ -292,7 +303,8 @@ app.post('/api/bot/:id/users/:uid/update', async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });  
-  }});
+  }
+});
 
 app.post('/api/bot/:id/submit-proof', async (req, res) => {
   try {
@@ -329,8 +341,7 @@ app.post('/api/bot/:id/submit-proof', async (req, res) => {
 
     await db.collection('bots').doc(botId).collection('proofs').doc(proofId).set(newProof);
     res.json({ success: true, proofId, message: 'Proof submitted successfully' });
-  } catch (error) {    
-    console.error('[submit-proof] Error:', error);
+  } catch (error) {        console.error('[submit-proof] Error:', error);
     res.status(500).json({ success: false, error: error.message });  
   }
 });
@@ -341,7 +352,8 @@ app.post('/api/bot/:id/proofs/:pid/resolve', async (req, res) => {
     const ref = db.collection('bots').doc(req.params.id).collection('proofs').doc(req.params.pid);    
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Proof already resolved' });
-    const p = doc.data();    if (approve && p.reward) {
+    const p = doc.data();
+    if (approve && p.reward) {
       try {        
         await db.collection('bots').doc(req.params.id).collection('users').doc(p.uid)
           .update({ balance: admin.firestore.FieldValue.increment(p.reward) });
@@ -378,8 +390,7 @@ async function payWithPTExchange({ wallet, amount, currency, clientWithdrawalId 
   } else {
     url = tonGateway + '/pay/jetton';
     payload = { api_key: apiKey, to_address: wallet, jetton_symbol: cur, amount: amount, comment: clientWithdrawalId || 'Clur Bot' };
-  }  
-  console.log('[PT Exchange] Sending:', cur, 'to', wallet, 'amount:', amount);
+  }    console.log('[PT Exchange] Sending:', cur, 'to', wallet, 'amount:', amount);
   
   const response = await axios.post(url, payload, {
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -390,7 +401,8 @@ async function payWithPTExchange({ wallet, amount, currency, clientWithdrawalId 
   if (response.status < 200 || response.status >= 300) {
     const error = response.data || {};    
     const message = error.error || error.message || error.detail || ('PT Exchange returned HTTP ' + response.status);
-    const err = new Error(message);    err.status = response.status;
+    const err = new Error(message);
+    err.status = response.status;
     err.providerResponse = response.data;
     throw err;
   }
@@ -427,8 +439,7 @@ async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId
   
   if (response.status < 200 || response.status >= 300) {
     const error = response.data || {};
-    const message = error.detail || error.message || error.error || ('xRocket returned HTTP ' + response.status);
-    const err = new Error(message);
+    const message = error.detail || error.message || error.error || ('xRocket returned HTTP ' + response.status);    const err = new Error(message);
     err.status = response.status;
     err.providerResponse = response.data;    
     throw err;
@@ -439,7 +450,8 @@ async function payWithXRocket({ telegramUserId, amount, currency, clientPayoutId
   if (status === 'failed') {
     const err = new Error('xRocket payout failed');
     err.status = response.status;
-    err.providerResponse = data;    throw err;
+    err.providerResponse = data;
+    throw err;
   }
   
   return { provider: 'xrocket', status: status || 'success', data: data };
@@ -460,9 +472,9 @@ app.post('/api/withdraw', async (req, res) => {
     if (!provider) return res.status(400).json({ ok: false, error: 'Payment provider required' });    
     if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
     
-    // ✅ STRICT CHECK: Airtime and Data are MANUAL ONLY
-    if ((currency === 'AIRTIME' || currency === 'DATA' || currency === 'MB') && provider !== 'Manual') {
-      return res.status(400).json({ ok: false, error: 'Airtime and MB/Data withdrawals are Manual only.' });
+    // ✅ STRICT CHECK: Airtime, MB, and Naira are MANUAL ONLY
+    if ((currency === 'AIRTIME' || currency === 'DATA' || currency === 'MB' || currency === 'NAIRA') && provider !== 'Manual') {
+      return res.status(400).json({ ok: false, error: 'This currency requires Manual processing.' });
     }
     
     const clientId = cleanString(body.clientWithdrawalId || body.clientPayoutId) || makeClientId('withdraw', botId, uid);    
@@ -476,8 +488,7 @@ app.post('/api/withdraw', async (req, res) => {
     }
     
     if (provider === 'AutoPay1' && !wallet) {
-      return res.status(400).json({ ok: false, error: 'Wallet address required for PT Exchange' });
-    }
+      return res.status(400).json({ ok: false, error: 'Wallet address required for PT Exchange' });    }
     if (provider === 'AutoPay2' && !telegramUserId) {
       return res.status(400).json({ ok: false, error: 'Telegram user ID required for xRocket' });
     }
@@ -488,7 +499,8 @@ app.post('/api/withdraw', async (req, res) => {
         return res.json({ ok: true, success: true, provider: 'AutoPay1', status: 'paid', currency, amount, wallet, clientId, result: result.data });
       } catch (e) {
         console.error('[PT Exchange]', e.message);
-        return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', status: 'failed', error: e.message, clientId });      }
+        return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', status: 'failed', error: e.message, clientId });
+      }
     }    
     if (provider === 'AutoPay2') {
       try {
@@ -525,8 +537,7 @@ app.post('/pay/notcoin', async (req, res) => {
 app.post('/pay/jetton', async (req, res) => {
   try {
     const body = req.body || {};
-    const wallet = cleanString(body.wallet || body.address);    
-    const amount = safeAmount(body.amount);
+    const wallet = cleanString(body.wallet || body.address);        const amount = safeAmount(body.amount);
     const currency = normalizeCurrency(body.jetton_symbol || body.currency || body.asset);
     if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });
     if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
@@ -537,7 +548,8 @@ app.post('/pay/jetton', async (req, res) => {
   } catch (e) {
     console.error('[JETTON]', e.message);
     return res.status(e.status || 502).json({ ok: false, error: e.message });
-  }});
+  }
+});
 
 app.post('/pay/xrocket', async (req, res) => {
   try {
@@ -574,8 +586,7 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
     const uid = parts[2];
     const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     await db.collection('users').doc(uid).set({ isPremium: true, premiumExpiresAt: expires, premiumMethod: currency, premiumTxHash: txHash }, { merge: true });
-    return { type: type, uid: uid };  
-  }
+    return { type: type, uid: uid };    }
   if (type === 'UPLOAD') return { type: type, uid: parts[2] };
   if (type === 'BUY') {
     const itemId = parts[2], uid = parts[3];
@@ -586,7 +597,8 @@ async function applyPayment(memo, amount, currency, txHash, sender) {
     if (d.status === 'sold') return { type: type, error: 'already sold' };
     await itemRef.update({ status: 'sold', soldTo: uid, soldAt: Date.now() });
     await db.collection('users').doc(uid).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(itemId) }, { merge: true });
-    await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
+    await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });
+    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
     return { type: type, uid: uid, itemId: itemId, link: d.link };  
   }
   return { type: 'unknown' };
@@ -623,8 +635,7 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
   try {
     const key = req.headers['x-admin-key'];
     if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
-    const ref = db.collection('payments').doc(req.params.pid);    
-    const doc = await ref.get();
+    const ref = db.collection('payments').doc(req.params.pid);        const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Not found' });
     const p = doc.data();
     const result = await applyPayment(p.memo, p.amount, 'NGN', p.ref, p.ownerId);
@@ -635,7 +646,8 @@ app.post('/api/admin/payments/:pid/approve', async (req, res) => {
   }
 });
 
-app.get('/api/user/:uid/profile', async (req, res) => {  try {
+app.get('/api/user/:uid/profile', async (req, res) => {
+  try {
     const doc = await db.collection('users').doc(req.params.uid).get();
     res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });  
   } catch (e) {
@@ -672,8 +684,7 @@ app.post('/api/store/upload', async (req, res) => {
     const b = req.body;
     if (!b.sellerId || !b.name || !b.link) return res.status(400).json({ error: 'Missing fields' });
     const doc = await db.collection('storeTemplates').add({ name: b.name, desc: b.desc || '', icon: b.icon || 'bi-robot', type: b.type || 'bot', link: b.link, price: b.price || '1 TON', sellerId: b.sellerId, sellerWallet: b.wallet || '', status: 'available', active: true, createdAt: Date.now() });
-    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');    
-    res.json({ success: true, id: doc.id });
+    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');        res.json({ success: true, id: doc.id });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -684,7 +695,8 @@ app.post('/api/store/purchase', async (req, res) => {
     const b = req.body;
     await db.collection('users').doc(b.userId).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId) }, { merge: true });
     res.json({ success: true });
-  } catch (e) {    res.status(500).json({ error: e.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -722,7 +734,6 @@ app.get('/api/admin/chat/:uid', async function (req, res) {
     res.json({ success: true, messages: messages });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
 app.post('/api/admin/chat/:uid/send', async function (req, res) {
   try {
     if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
@@ -733,6 +744,7 @@ app.post('/api/admin/chat/:uid/send', async function (req, res) {
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 app.get('/api/admin/payments', async function (req, res) {
   if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
   try {
@@ -770,8 +782,7 @@ app.post('/api/admin/payments/:id/reject', async function (req, res) {
   try {
     await db.collection('payments').doc(req.params.id).update({ status: 'rejected', rejectedAt: Date.now() });
     res.json({ success: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+  } catch (e) { res.status(500).json({ error: e.message }); }});
 
 app.delete('/api/store/:id', async function (req, res) {
   if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
@@ -782,7 +793,8 @@ app.delete('/api/store/:id', async function (req, res) {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, function() {  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
+app.listen(PORT, function() {
+  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
   console.log('[payments] Supported Auto-Pay coins:', AUTO_PAY_COINS.join(', '));
   engine.loadAllBots();
   const APP_URL = process.env.APP_URL || '';
