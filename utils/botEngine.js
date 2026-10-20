@@ -249,7 +249,7 @@ async function startBot(cfgIn) {
     const msg = String((err && err.message) || err);
     botErrors[botId] = (botErrors[botId] || 0) + 1;
     if (isAuthError(err)) deactivate('Auth error: ' + msg.slice(0, 100));
-    else if (/409/.test(msg)) console.log(`[engine:${botId}] ️ 409 conflict - another poller is running`);
+    else if (/409/.test(msg)) console.log(`[engine:${botId}] ⚠️ 409 conflict - another poller is running`);
     else if (/ETELEGRAM|network|timeout|ECONNRESET|socket hang/i.test(msg)) {
       if (botErrors[botId] % 10 === 1) console.log(`[engine:${botId}] network blip (${botErrors[botId]} total): ${msg.slice(0, 100)}`);
     } else console.log(`[engine:${botId}] polling error: ${msg.slice(0, 150)}`);
@@ -294,17 +294,16 @@ async function startBot(cfgIn) {
       return true;
     } catch (e) { console.log(`[engine:${botId}] refreshCfg error: ${e.message}`); return true; }  }
 
-  // ✅ FIXED MENU KEYBOARD (Emojis match exactly with handler)
+  // ✅ FIXED MENU KEYBOARD (Removed Join/Create Bot, Fixed Icons for Invite/Tasks)
   const menuKeyboard = () => {
     let walletBtnText = '🔗 Wallet Address';
     if (currency === 'Naira') walletBtnText = '🏦 Bank Details';
     if (currency === 'Airtime' || currency === 'MB') walletBtnText = '📱 Phone Number';
 
     const keyboard = [
-      [{ text: '💼 Balance' }, { text: ' Invite' }], 
-      [{ text: ' Tasks' }, { text: '💳 Withdraw' }],
-      [{ text: walletBtnText }],
-      [{ text: '🤖 Join Bot' }, { text: '🛠️ Create Bot' }]
+      [{ text: '💼 Balance' }, { text: '👥 Invite' }], 
+      [{ text: '📋 Tasks' }, { text: '💳 Withdraw' }],
+      [{ text: walletBtnText }]
     ];
     return { reply_markup: { keyboard, resize_keyboard: true }, parse_mode: 'HTML' };
   };
@@ -330,7 +329,7 @@ async function startBot(cfgIn) {
     const a = Math.floor(Math.random() * 10) + 1;
     const b = Math.floor(Math.random() * 10) + 1;
     setA(key, 'captcha', { answer: a + b });
-    bot.sendMessage(uid, (wrong ? '❌ Wrong answer!\n\nTry again:\n\n' : ' <b>ARE YOU A ROBOT?</b>\n\nProve you are human first:\n\n') + '🧮 <b>' + a + ' + ' + b + ' = ?</b>\n\n👉 Send your answer:', { parse_mode: 'HTML' }).catch(() => {});
+    bot.sendMessage(uid, (wrong ? '❌ Wrong answer!\n\nTry again:\n\n' : '🤖 <b>ARE YOU A ROBOT?</b>\n\nProve you are human first:\n\n') + '🧮 <b>' + a + ' + ' + b + ' = ?</b>\n\n👉 Send your answer:', { parse_mode: 'HTML' }).catch(() => {});
   }
 
   async function showChannels(uid) {    
@@ -338,12 +337,12 @@ async function startBot(cfgIn) {
     allChannels.push({ text: '💼 Official', url: OFFICIAL_URL });
     for (const ch of mustJoin) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
     for (const ch of nonMust) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
-    if (payout) { allChannels.push({ text: '💰 Payment', url: chanUrl(payout) }); }
+    if (payout) { allChannels.push({ text: ' Payment', url: chanUrl(payout) }); }
 
     const rows = [];
-    for (let i = 0; i < allChannels.length; i += 2) { rows.push(allChannels.slice(i, i + 2)); }    rows.push([{ text: '✅ START', callback_data: 'continue' }]);
-
-    const welcomeMsg = '👋 <b>Welcome to ' + esc(name) + '!</b>\n\nHere\'s how it works:\n• Invite friends using your unique link\n• Earn ' + esc(currency) + ' for every friend who joins\n• Withdraw your earnings anytime\n\n <i>First, join our channels:</i>\n\n🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
+    for (let i = 0; i < allChannels.length; i += 2) { rows.push(allChannels.slice(i, i + 2)); }
+    rows.push([{ text: '✅ START', callback_data: 'continue' }]);
+    const welcomeMsg = '👋 <b>Welcome to ' + esc(name) + '!</b>\n\nHere\'s how it works:\n• Invite friends using your unique link\n• Earn ' + esc(currency) + ' for every friend who joins\n• Withdraw your earnings anytime\n\n👉 <i>First, join our channels:</i>\n\n🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
     await bot.sendMessage(uid, welcomeMsg, { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
   }
 
@@ -362,7 +361,7 @@ async function startBot(cfgIn) {
     if (refId && refId !== String(uid) && !got.data.refer) {
       await got.ref.update({ refer: refId }).catch(() => {});
       await db.collection('bots').doc(botId).collection('users').doc(refId).update({ balance: FieldValue.increment(refB), refs: FieldValue.increment(1) }).catch(() => {});
-      bot.sendMessage(refId, ' You earned <b>' + refB + ' ' + esc(currency) + '</b> for a new referral!', { parse_mode: 'HTML' }).catch(() => {});
+      bot.sendMessage(refId, '🎁 You earned <b>' + refB + ' ' + esc(currency) + '</b> for a new referral!', { parse_mode: 'HTML' }).catch(() => {});
     }
     await showChannels(uid);
   }));
@@ -384,19 +383,19 @@ async function startBot(cfgIn) {
     }
     
     const got = await getUser(botId, uid);
-    if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
+    if (got.data.banned) return bot.sendMessage(uid, ' <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
 
     const st = getA(key);    
     if (st) {
       delete awaiting[key];
       
-      if (st.type === 'naira_bank_name') {        setA(key, 'naira_bank_acct', { bankName: txt });        
-        return bot.sendMessage(uid, ' <b>Enter Account Number</b>\n\nExample: 0123456789', { parse_mode: 'HTML' }).catch(() => {});
+      if (st.type === 'naira_bank_name') {
+        setA(key, 'naira_bank_acct', { bankName: txt });                return bot.sendMessage(uid, '🔢 <b>Enter Account Number</b>\n\nExample: 0123456789', { parse_mode: 'HTML' }).catch(() => {});
       }
 
       if (st.type === 'naira_bank_acct') {
         setA(key, 'naira_bank_name_full', { bankName: st.bankName, bankAcct: txt });
-        return bot.sendMessage(uid, ' <b>Enter Account Name</b>\n\nExample: John Doe', { parse_mode: 'HTML' }).catch(() => {});
+        return bot.sendMessage(uid, '👤 <b>Enter Account Name</b>\n\nExample: John Doe', { parse_mode: 'HTML' }).catch(() => {});
       }
 
       if (st.type === 'naira_bank_name_full') {
@@ -429,39 +428,32 @@ async function startBot(cfgIn) {
       if (st.type === 'proof') return saveProof(uid, msg, st.task, st.reward);
     }
 
-    // ✅ FIXED: Exact text matches for buttons
+    // ✅ FIXED: Exact text matches with icons
     if (txt === '💼 Balance') return handleBalance(uid, got);
     if (txt === '👥 Invite') return handleInvite(uid, got);    
     if (txt === '📋 Tasks') return handleTasks(uid);
     
-    if (txt === '🤖 Join Bot') {
-      return bot.sendMessage(uid, '🤖 <b>Join our main bot here:</b>\n\nhttps://t.me/' + POWERED_BY, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
-    }
-    if (txt === '🛠️ Create Bot') {
-      return bot.sendMessage(uid, '🛠️ <b>Create your own bot here:</b>\n\nhttps://t.me/' + POWERED_BY, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
-    }
     if (txt === '🏦 Bank Details' && currency === 'Naira') {
       setA(key, 'naira_bank_name');
-      return bot.sendMessage(uid, '🏦 <b>Enter Bank Name</b>\n\nExample: GTBank, First Bank, etc.', { parse_mode: 'HTML' }).catch(() => {});
+      return bot.sendMessage(uid, ' <b>Enter Bank Name</b>\n\nExample: GTBank, First Bank, etc.', { parse_mode: 'HTML' }).catch(() => {});
     }
 
-    if (txt === '📱 Phone Number' && (currency === 'Airtime' || currency === 'MB')) {
-      if (botNetwork === 'All') {
-        setA(key, 'set_phone_network');
+    if (txt === ' Phone Number' && (currency === 'Airtime' || currency === 'MB')) {
+      if (botNetwork === 'All') {        setA(key, 'set_phone_network');
         const rows = [
           [{ text: '🟡 MTN', callback_data: 'set_net_MTN' }, { text: '🔴 AIRTEL', callback_data: 'set_net_AIRTEL' }],
           [{ text: '🟢 GLO', callback_data: 'set_net_GLO' }, { text: '🟣 9MOBILE', callback_data: 'set_net_9MOBILE' }]
         ];
-        return bot.sendMessage(uid, ' <b>Select Your Network</b>\n\nChoose the network you want to link to your account.', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
+        return bot.sendMessage(uid, '📶 <b>Select Your Network</b>\n\nChoose the network you want to link to your account.', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
       } else {
         setA(key, 'set_phone_direct', { network: botNetwork });
-        return bot.sendMessage(uid, `📱 <b>Please input your ${esc(botNetwork)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
+        return bot.sendMessage(uid, ` <b>Please input your ${esc(botNetwork)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
 
-    if (txt === '🔗 Wallet Address' && (currency !== 'Naira' && currency !== 'Airtime' && currency !== 'MB')) {
+    if (txt === ' Wallet Address' && (currency !== 'Naira' && currency !== 'Airtime' && currency !== 'MB')) {
       setA(key, 'set_crypto_wallet');
-      return bot.sendMessage(uid, '🔗 <b>Current Wallet:</b>\n<code>' + esc(got.data.wallet || 'Not Set') + '</code>\n\n <b>Send your new wallet address to update it:</b>', { parse_mode: 'HTML' }).catch(() => {});
+      return bot.sendMessage(uid, ' <b>Current Wallet:</b>\n<code>' + esc(got.data.wallet || 'Not Set') + '</code>\n\n📝 <b>Send your new wallet address to update it:</b>', { parse_mode: 'HTML' }).catch(() => {});
     }
 
     if (txt === '💳 Withdraw') {
@@ -471,7 +463,7 @@ async function startBot(cfgIn) {
       if (!hasDetails) {
         let setupMsg = '⚠️ <b>Withdrawal details not set!</b>\n\nPlease set up your withdrawal details first by clicking the ';
         if (currency === 'Naira') setupMsg += '"🏦 Bank Details"';
-        else if (currency === 'Airtime' || currency === 'MB') setupMsg += '" Phone Number"';
+        else if (currency === 'Airtime' || currency === 'MB') setupMsg += '"📱 Phone Number"';
         else setupMsg += '"🔗 Wallet Address"';
         setupMsg += ' button in the main menu.';
         return bot.sendMessage(uid, setupMsg, { parse_mode: 'HTML' }).catch(() => {});
@@ -479,7 +471,7 @@ async function startBot(cfgIn) {
 
       setA(key, 'withdraw_amount');      
       let feeText = fee > 0 ? `\n💳 Fee: ${fee} ${esc(currency)}` : '';
-      return bot.sendMessage(uid, `💳 <b>WITHDRAW</b>\n\n💰 Enter amount in ${esc(currency)}\n️ Min: ${minW}\n⬆️ Max: ${maxW}${feeText}`, { parse_mode: 'HTML' }).catch(() => {});
+      return bot.sendMessage(uid, `💳 <b>WITHDRAW</b>\n\n💰 Enter amount in ${esc(currency)}\n⬇️ Min: ${minW}\n⬆️ Max: ${maxW}${feeText}`, { parse_mode: 'HTML' }).catch(() => {});
     }
   }));
 
@@ -488,15 +480,15 @@ async function startBot(cfgIn) {
     const key = botId + ':' + uid;
 
     if (cq.data === 'continue') {
-      await refreshCfg();      for (const ch of mustJoin) {
+      await refreshCfg();
+      for (const ch of mustJoin) {
         const chan = normchan(ch);
         let m;
         try { m = await bot.getChatMember(chan, uid); } catch (e) {
           return bot.answerCallbackQuery(cq.id, { text: '⚠️ Bot is not admin in ' + ch + ' — contact the owner.', show_alert: true }).catch(() => {});
         }
         if (m.status === 'left' || m.status === 'kicked') {
-          return bot.answerCallbackQuery(cq.id, { text: '❌ Please join ' + ch + ' first!', show_alert: true }).catch(() => {});
-        }
+          return bot.answerCallbackQuery(cq.id, { text: '❌ Please join ' + ch + ' first!', show_alert: true }).catch(() => {});        }
       }
       await bot.answerCallbackQuery(cq.id, { text: '✅ Channels verified!' }).catch(() => {});
       if (botDetect) {
@@ -512,7 +504,7 @@ async function startBot(cfgIn) {
       const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];
       const rows = taskRows(completed);
       rows.push([{ text: '🎁 Invite Friends — earn ' + refB + ' ' + currency, url: 'https://t.me/' + me.username + '?start=' + uid }]);
-      return bot.sendMessage(uid, '<b> EARN MORE ' + esc(currency) + '</b>\n\n━━━━━━━━━━━━━━\n\n1️⃣ <b>Invite friends</b> — earn ' + refB + ' ' + esc(currency) + ' per referral\n<code>https://t.me/' + me.username + '?start=' + uid + '</code>\n\n2️⃣ <b>Complete tasks</b> — tap a task below:\n\n━━━━━━━━━━━━━━', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
+      return bot.sendMessage(uid, '<b>🎯 EARN MORE ' + esc(currency) + '</b>\n\n━━━━━━━━━━━━━━\n\n1️⃣ <b>Invite friends</b> — earn ' + refB + ' ' + esc(currency) + ' per referral\n<code>https://t.me/' + me.username + '?start=' + uid + '</code>\n\n2️⃣ <b>Complete tasks</b> — tap a task below:\n\n━━━━━━━━━━━━━━', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
     }
 
     if (cq.data && cq.data.indexOf('task_completed_') === 0) {      
@@ -524,7 +516,7 @@ async function startBot(cfgIn) {
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, ' <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? ' Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click " Open Task" to complete it.\n2️ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
+      return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️ Click "🔗 Open Task" to complete it.\n2️ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
     }
 
     if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {      
@@ -532,19 +524,19 @@ async function startBot(cfgIn) {
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, ' <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    
+      return bot.sendMessage(uid, '📸 <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    
     }
 
     if (cq.data && cq.data.startsWith('set_net_')) {
       const network = cq.data.split('_')[2];
-      const st = getA(key);      if (st && st.type === 'set_phone_network') {
+      const st = getA(key);
+      if (st && st.type === 'set_phone_network') {
         delete awaiting[key];
         setA(key, 'set_phone_direct', { network: network });
         await bot.answerCallbackQuery(cq.id, { text: 'Selected ' + network }).catch(() => {});
         return bot.sendMessage(uid, `📱 <b>Please input your ${esc(network)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
-
     if (cq.data && (cq.data.startsWith('ap_prf_') || cq.data.startsWith('dec_prf_'))) {
       const isApprove = cq.data.startsWith('ap_prf_');
       const parts = cq.data.split('_');
@@ -557,44 +549,44 @@ async function startBot(cfgIn) {
       try {
         const member = await bot.getChatMember(chatId, clickerId);
         if (member.status !== 'creator' && member.status !== 'administrator') {
-          return bot.answerCallbackQuery(cq.id, { text: '⚠️ Only channel admins can approve/decline tasks!', show_alert: true }).catch(() => {});
+          return bot.answerCallbackQuery(cq.id, { text: '️ Only channel admins can approve/decline tasks!', show_alert: true }).catch(() => {});
         }
       } catch (e) {}
 
       const msgText = cq.message.text || cq.message.caption || '';
-      const taskMatch = msgText.match(/📋 Task:\s*(.+)/);
+      const taskMatch = msgText.match(/ Task:\s*(.+)/);
       const taskName = taskMatch ? taskMatch[1].trim().split('\n')[0] : 'Task';
 
       const userRef = db.collection('bots').doc(botId).collection('users').doc(proofUid);
       
       if (isApprove) {        
         await userRef.update({ balance: FieldValue.increment(reward), completedTasks: FieldValue.arrayUnion(taskName) }).catch(() => {});
-        bot.sendMessage(proofUid, `✅ <b>APPROVED!</b>\n\n You earned <b>${reward} ${esc(currency)}</b> for: ${esc(taskName)}`, { parse_mode: 'HTML' }).catch(() => {});
+        bot.sendMessage(proofUid, `✅ <b>APPROVED!</b>\n\n🎁 You earned <b>${reward} ${esc(currency)}</b> for: ${esc(taskName)}`, { parse_mode: 'HTML' }).catch(() => {});
         await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});
         await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});        
       } else {
         await userRef.update({ completedTasks: FieldValue.arrayUnion(taskName) }).catch(() => {});
-        bot.sendMessage(proofUid, `❌ <b>Your proof for "${esc(taskName)}" was declined.</b>`, { parse_mode: 'HTML' }).catch(() => {});
+        bot.sendMessage(proofUid, ` <b>Your proof for "${esc(taskName)}" was declined.</b>`, { parse_mode: 'HTML' }).catch(() => {});
         await bot.answerCallbackQuery(cq.id, { text: '❌ Declined & deleted' }).catch(() => {});        
         await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
       }
     }
     
-    // ✅ WITHDRAWAL APPROVE / DECLINE HANDLER (NO REFUND ON DECLINE)
+    // ✅ WITHDRAWAL APPROVE / DECLINE HANDLER (Replaces message in payout channel)
     if (cq.data && (cq.data.startsWith('ap_wd_') || cq.data.startsWith('dec_wd_'))) {
       const isApprove = cq.data.startsWith('ap_wd_');
       const parts = cq.data.split('_');
       const wdUid = parts[2];
       const wdAmount = parseFloat(parts[3]) || 0;
-      const wdKey = parts[4];       
+      const wdKey = parts[4]; 
+      
       const chatId = cq.message.chat.id;
       const clickerId = cq.from.id;
       
       try {
         const member = await bot.getChatMember(chatId, clickerId);
         if (member.status !== 'creator' && member.status !== 'administrator') {
-          return bot.answerCallbackQuery(cq.id, { text: '⚠️ Only channel admins can approve/decline!', show_alert: true }).catch(() => {});
-        }
+          return bot.answerCallbackQuery(cq.id, { text: '⚠️ Only channel admins can approve/decline!', show_alert: true }).catch(() => {});        }
       } catch (e) {}
 
       const wdRef = db.collection('bots').doc(botId).collection('withdrawals').doc(wdKey);
@@ -607,18 +599,45 @@ async function startBot(cfgIn) {
       const wdData = wdSnap.data();
       const wdDetails = wdData.details || 'N/A';
       
+      // Inline keyboard for Join Bot & Create Bot
+      const promoKeyboard = {
+        inline_keyboard: [
+          [{ text: '🤖 Join Bot', url: 'https://t.me/' + POWERED_BY }, { text: '️ Create Bot', url: 'https://t.me/' + POWERED_BY }]
+        ]
+      };
+
       if (isApprove) {
         await wdRef.update({ status: 'paid', paidAt: Date.now() }).catch(() => {});
+        
+        const approvedMsg = `✅ <b>WITHDRAWAL APPROVED!</b>\n\nYour withdrawal has been successfully processed.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n Details: ${esc(wdDetails)}\n\nThe funds have been sent to your account.`;
+        
+        // Edit the original message in the payout channel
+        bot.editMessageText(approvedMsg, {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          parse_mode: 'HTML',
+          reply_markup: promoKeyboard
+        }).catch(() => {});
+        
+        // Notify the user
         bot.sendMessage(wdUid, `✅ <b>WITHDRAWAL APPROVED!</b>\n\nYour withdrawal has been successfully processed.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n📋 Details: ${esc(wdDetails)}\n\nThe funds have been sent to your account.`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.answerCallbackQuery(cq.id, { text: '✅ Approved & deleted' }).catch(() => {});
-        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
+        await bot.answerCallbackQuery(cq.id, { text: '✅ Approved' }).catch(() => {});
       } else {
-        //  NO REFUND ON DECLINE
+        // NO REFUND ON DECLINE
         await wdRef.update({ status: 'declined', declinedAt: Date.now() }).catch(() => {});
         
+        const declinedMsg = `❌ <b>WITHDRAWAL DECLINED</b>\n\nYour withdrawal request has been declined by the admin.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n📋 Details: ${esc(wdDetails)}\n\n<i>Note: No refund will be issued.</i>`;
+        
+        // Edit the original message in the payout channel
+        bot.editMessageText(declinedMsg, {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          parse_mode: 'HTML',
+          reply_markup: promoKeyboard
+        }).catch(() => {});
+        // Notify the user
         bot.sendMessage(wdUid, `❌ <b>WITHDRAWAL DECLINED</b>\n\nYour withdrawal request has been declined by the admin.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n📋 Details: ${esc(wdDetails)}\n\n<i>Note: No refund will be issued.</i>`, { parse_mode: 'HTML' }).catch(() => {});
-        await bot.answerCallbackQuery(cq.id, { text: '❌ Declined & deleted' }).catch(() => {});        
-        await bot.deleteMessage(chatId, cq.message.message_id).catch(() => {});
+        await bot.answerCallbackQuery(cq.id, { text: '❌ Declined' }).catch(() => {});
       }
     }
   }));
@@ -629,13 +648,14 @@ async function startBot(cfgIn) {
       const primaryTarget = normchan(taskProofChannel);      
       const fallbackTarget = normchan(payout);
       
-      const caption = ` <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n👤 User ID: <code>${uid}</code>\n📝 ${esc(msg.text || '(photo sent)')}`;
+      const caption = `🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n👤 User ID: <code>${uid}</code>\n📝 ${esc(msg.text || '(photo sent)')}`;
       const btns = { reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ap_prf_${uid}_${reward}` }, { text: '❌ Decline', callback_data: `dec_prf_${uid}_${reward}` }]] }, parse_mode: 'HTML' };
 
       const sendProof = async (targetId, isFallback) => {
         if (!targetId) throw new Error('No target channel ID provided');
         const finalCaption = isFallback ? caption + `\n\n⚠️ (Sent to fallback: ${targetId})` : caption;
-        if (hasPhoto) { await bot.sendPhoto(targetId, msg.photo[msg.photo.length - 1].file_id, { caption: finalCaption, ...btns }); }        else { await bot.sendMessage(targetId, finalCaption, btns); }
+        if (hasPhoto) { await bot.sendPhoto(targetId, msg.photo[msg.photo.length - 1].file_id, { caption: finalCaption, ...btns }); }
+        else { await bot.sendMessage(targetId, finalCaption, btns); }
       };
 
       try {
@@ -664,8 +684,7 @@ async function startBot(cfgIn) {
   async function handleInvite(uid, got) {
     const me = await bot.getMe();
     const inviteLink = `https://t.me/${me.username}?start=${uid}`;
-    await bot.sendMessage(uid, 
-      `<b>🎁 INVITE & EARN</b>\n\n` +
+    await bot.sendMessage(uid,       `<b>🎁 INVITE & EARN</b>\n\n` +
       `━━━━━━━━━━━━━━\n\n` +
       `💎 Per referral: <b>${refB} ${esc(currency)}</b>\n\n` +
       `👥 Your referrals: <b>${got.data.refs || 0}</b>\n\n` +
@@ -684,7 +703,8 @@ async function startBot(cfgIn) {
   }
 
   // ✅ FIXED: Tasks function works perfectly
-  async function handleTasks(uid) {    await refreshCfg();    
+  async function handleTasks(uid) {
+    await refreshCfg();    
     const got = await getUser(botId, uid);
     const completed = Array.isArray(got.data.completedTasks) ? got.data.completedTasks : [];    
     
@@ -694,7 +714,7 @@ async function startBot(cfgIn) {
     
     const rows = taskRows(completed);
     await bot.sendMessage(uid, 
-      '📋 <b>AVAILABLE TASKS</b>\n\n' +
+      ' <b>AVAILABLE TASKS</b>\n\n' +
       `Tap a task below to complete it:\n\n` +
       `━━━━━━━━━━━━━━`, 
       { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }
@@ -714,26 +734,20 @@ async function startBot(cfgIn) {
     const wdKey = wdRef.id;
 
     await got.ref.update({ balance: FieldValue.increment(-amount) });
-
     const uname = await getUsername(uid);
-    const wdMsg = `📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n🤖 Bot: ${esc(name)}\n👤 User ID: <code>${uid}</code>\n🧑 User: ${esc(uname || 'no username')}\n\n Requested: <b>${amount} ${esc(currency)}</b>\n💳 Fee: <b>${feeAmount} ${esc(currency)}</b>\n✅ User Receives: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n⚠️ Status: <b>PENDING</b>\n🕒 ${new Date().toLocaleString()}`;
+    const wdMsg = `📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n🤖 Bot: ${esc(name)}\n👤 User ID: <code>${uid}</code>\n🧑 User: ${esc(uname || 'no username')}\n\n💰 Requested: <b>${amount} ${esc(currency)}</b>\n💳 Fee: <b>${feeAmount} ${esc(currency)}</b>\n✅ User Receives: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n⚠️ Status: <b>PENDING</b>\n🕒 ${new Date().toLocaleString()}`;
 
+    // Manual currencies always go to admin channel
     if (currency === 'Naira' || currency === 'Airtime' || currency === 'MB') {
       const btns = { 
         reply_markup: { 
           inline_keyboard: [
-            [
-              { text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, 
-              { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }
-            ],
-            [
-              { text: ' Join Bot', url: 'https://t.me/' + POWERED_BY },
-              { text: '🛠️ Create Bot', url: 'https://t.me/' + POWERED_BY }
-            ]
+            [{ text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }]
           ] 
         }, 
         parse_mode: 'HTML' 
-      };      try {
+      };
+      try {
         await bot.sendMessage(normchan(payout), wdMsg, btns);        
         bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin to process manually.</i>`, { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
@@ -744,52 +758,46 @@ async function startBot(cfgIn) {
       return;
     }
 
+    // Crypto currencies check approval setting
     if (requireApproval || !isAutoPayCoin(currency)) {
       const btns = { 
         reply_markup: { 
           inline_keyboard: [
-            [
-              { text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, 
-              { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }
-            ],
-            [
-              { text: ' Join Bot', url: 'https://t.me/' + POWERED_BY },
-              { text: '🛠️ Create Bot', url: 'https://t.me/' + POWERED_BY }
-            ]
+            [{ text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }]
           ] 
         }, 
         parse_mode: 'HTML' 
       };
       try {
         await bot.sendMessage(normchan(payout), wdMsg, btns);
-        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
+        bot.sendMessage(uid, ` <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
         await got.ref.update({ balance: FieldValue.increment(amount) });
         await wdRef.update({ status: 'failed' });
         bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
       }
     } else {
-      bot.sendMessage(uid, `⏳ <b>Processing withdrawal...</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}`, { parse_mode: 'HTML' }).catch(() => {});
+      bot.sendMessage(uid, ` <b>Processing withdrawal...</b>\n\n ${amount} ${esc(currency)}\n\n ${esc(details)}`, { parse_mode: 'HTML' }).catch(() => {});
       
       try {
         let success = false;
         let txHash = '';
-        
-        if (pay === 'AutoPay1') {            
+                if (pay === 'AutoPay1') {            
           const result = await sendPTPayment({ botId, apiKey, currency, wallet: got.data.wallet, amount: cleanReceived, comment: name });
           success = result.success;
           txHash = result.txHash;
         } else if (pay === 'AutoPay2') {
           const result = await sendXRocketPayment({ botId, apiKey, uid, currency, amount: cleanReceived, description: name });
           success = result.paid;
-          txHash = result.payoutId;        } else {
+          txHash = result.payoutId;
+        } else {
           throw new Error('No valid AutoPay method configured.');
         }
 
         if (success) {
           await wdRef.update({ status: 'paid', txHash, paidAt: Date.now() });
           await notifyPayout(`✅ <b>Auto-Pay SUCCESS</b>\n\n👤 ${uid}\n💰 ${amount} ${esc(currency)}\n📋 ${esc(details)}${txHash ? '\n💳 TX: ' + esc(txHash) : ''}`);
-          bot.sendMessage(uid, `✅ <b>Withdrawal Paid!</b>\n\n💰 ${receivedAmount} ${esc(currency)} sent to:\n${esc(details)}${txHash ? '\n\n TX: <code>' + esc(txHash) + '</code>' : ''}`, { parse_mode: 'HTML' }).catch(() => {});
+          bot.sendMessage(uid, `✅ <b>Withdrawal Paid!</b>\n\n💰 ${receivedAmount} ${esc(currency)} sent to:\n${esc(details)}${txHash ? '\n\n💳 TX: <code>' + esc(txHash) + '</code>' : ''}`, { parse_mode: 'HTML' }).catch(() => {});
         } else {
           throw new Error('Payment provider returned failure.');
         }
@@ -798,7 +806,7 @@ async function startBot(cfgIn) {
         console.log(`[engine:${botId}] ❌ Auto-Pay ERROR: ${err}`);
         await got.ref.update({ balance: FieldValue.increment(amount) }); 
         await wdRef.update({ status: 'failed', error: err });
-        await notifyPayout(` <b>Auto-Pay FAILED</b>\n\n👤 ${uid}\n💰 ${amount} ${esc(currency)}\n⚠️ ${esc(err).slice(0, 300)}`);
+        await notifyPayout(`❌ <b>Auto-Pay FAILED</b>\n\n👤 ${uid}\n ${amount} ${esc(currency)}\n️ ${esc(err).slice(0, 300)}`);
         bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
@@ -818,20 +826,20 @@ async function restartBot(botId) {
 async function loadAllBots() {
   try {
     const snap = await db.collection('bots').where('status', '==', 'active').get();
-    console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
+    console.log(`[engine]  loading ${snap.size} bots sequentially...`);
     let i = 0;    
     for (const d of snap.docs) {
       try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }
       catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
-      i++;      
-      if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
+      i++;            if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
     }
     console.log('[engine] ✅ all bots live');
   } catch (e) { console.error('[engine] ❌ loadAllBots error:', e.message); }
 }
 
 setInterval(async () => {
-  try {    const snap = await db.collection('bots').where('status', '==', 'active').get();    
+  try {
+    const snap = await db.collection('bots').where('status', '==', 'active').get();    
     let healed = 0;
     for (const doc of snap.docs) {
       if (!activeBots[doc.id]) {
