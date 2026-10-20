@@ -47,7 +47,7 @@ function safeAmount(value) {
   return n;
 }
 
-function makeClientId(prefix, botId, uid) {            return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
+function makeClientId(prefix, botId, uid) {  return prefix + '_' + String(botId || 'bot') + '_' + String(uid || 'user') + '_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 }
 
 async function notifyOwner(text) {
@@ -96,7 +96,7 @@ app.post('/api/check-channel-admin', async (req, res) => {
     const m = await axios.get('https://api.telegram.org/bot' + token + '/getChatMember', { params: { chat_id: channel, user_id: me.data.result.id }, timeout: 5000 });
     const st = m.data.result.status;
     res.json({ ok: true, isAdmin: st === 'administrator' || st === 'creator', status: st });  
-  } catch (e) {                    res.json({ ok: true, isAdmin: false, status: 'error' });
+  } catch (e) {    res.json({ ok: true, isAdmin: false, status: 'error' });
   }
 });
 
@@ -145,7 +145,7 @@ app.get('/api/user/:uid/bots', async (req, res) => {
 
 app.get('/api/bot/:id', async (req, res) => {  
   try {
-    const doc = await db.collection('bots').doc(req.params.id).get();        if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    const doc = await db.collection('bots').doc(req.params.id).get();    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
     const b = doc.data();            
     delete b.token; delete b.apiKey;
     
@@ -461,8 +461,8 @@ app.post('/api/withdraw', async (req, res) => {
     if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
     
     // ✅ STRICT CHECK: Airtime and Data are MANUAL ONLY
-    if ((currency === 'AIRTIME' || currency === 'DATA') && provider !== 'Manual') {
-      return res.status(400).json({ ok: false, error: 'Airtime and Data withdrawals are Manual only.' });
+    if ((currency === 'AIRTIME' || currency === 'DATA' || currency === 'MB') && provider !== 'Manual') {
+      return res.status(400).json({ ok: false, error: 'Airtime and MB/Data withdrawals are Manual only.' });
     }
     
     const clientId = cleanString(body.clientWithdrawalId || body.clientPayoutId) || makeClientId('withdraw', botId, uid);    
@@ -506,11 +506,283 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
-// ... (Keep the rest of your server.js routes: /pay/notcoin, /pay/jetton, /pay/xrocket, /api/bot/:id/withdrawals, /api/check-payment, /api/process-payment, /api/admin/payments, /api/user/:uid/profile, /api/store/*, cron jobs, admin chats, etc. exactly as they were) ...
+app.post('/pay/notcoin', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const wallet = cleanString(body.wallet || body.address);
+    const amount = safeAmount(body.amount);
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });    
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    const clientId = cleanString(body.clientWithdrawalId) || makeClientId('not', body.botId || 'notcoin', body.uid || body.userId);
+    const result = await payWithPTExchange({ wallet, amount, currency: 'NOT', clientWithdrawalId: clientId });
+    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency: 'NOT', amount, wallet, clientId, result: result.data });
+  } catch (e) {
+    console.error('[NOTCOIN]', e.message);
+    return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay1', currency: 'NOT', error: e.message });
+  }
+});
+
+app.post('/pay/jetton', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const wallet = cleanString(body.wallet || body.address);    
+    const amount = safeAmount(body.amount);
+    const currency = normalizeCurrency(body.jetton_symbol || body.currency || body.asset);
+    if (!wallet) return res.status(400).json({ ok: false, error: 'wallet is required' });
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (!currency) return res.status(400).json({ ok: false, error: 'jetton_symbol/currency is required' });
+    const clientId = cleanString(body.clientWithdrawalId) || makeClientId('jetton', body.botId || 'bot', body.uid || body.userId);
+    const result = await payWithPTExchange({ wallet, amount, currency, clientWithdrawalId: clientId });
+    return res.json({ ok: true, success: true, provider: 'AutoPay1', currency, amount, wallet, clientId, result: result.data });  
+  } catch (e) {
+    console.error('[JETTON]', e.message);
+    return res.status(e.status || 502).json({ ok: false, error: e.message });
+  }});
+
+app.post('/pay/xrocket', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const telegramUserId = cleanString(body.telegramUserId || body.userId || body.uid);
+    const amount = safeAmount(body.amount);
+    const currency = normalizeCurrency(body.currency || body.asset);
+    if (!telegramUserId) return res.status(400).json({ ok: false, error: 'telegramUserId is required' });
+    if (!amount) return res.status(400).json({ ok: false, error: 'Invalid amount' });    
+    if (!currency) return res.status(400).json({ ok: false, error: 'Currency required' });
+    const clientId = cleanString(body.clientPayoutId) || makeClientId('rocket', body.botId || 'bot', telegramUserId);
+    const result = await payWithXRocket({ telegramUserId, amount, currency, clientPayoutId: clientId, description: body.description || 'Bot reward withdrawal' });
+    return res.json({ ok: true, success: true, provider: 'AutoPay2', currency, amount, telegramUserId, clientId, status: result.status, result: result.data });
+  } catch (e) {
+    console.error('[xRocket route]', e.message);
+    return res.status(e.status || 502).json({ ok: false, provider: 'AutoPay2', error: e.message });
+  }
+});
+
+app.get('/api/bot/:id/withdrawals', async (req, res) => {
+  try {
+    const snap = await db.collection('bots').doc(req.params.id).collection('withdrawals').limit(500).get();
+    const withdrawals = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });    
+    res.json({ success: true, withdrawals });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+async function applyPayment(memo, amount, currency, txHash, sender) {
+  const parts = String(memo || '').split('_');
+  const type = parts[1];
+  if (type === 'PREMIUM') {
+    const uid = parts[2];
+    const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    await db.collection('users').doc(uid).set({ isPremium: true, premiumExpiresAt: expires, premiumMethod: currency, premiumTxHash: txHash }, { merge: true });
+    return { type: type, uid: uid };  
+  }
+  if (type === 'UPLOAD') return { type: type, uid: parts[2] };
+  if (type === 'BUY') {
+    const itemId = parts[2], uid = parts[3];
+    const itemRef = db.collection('storeTemplates').doc(itemId);
+    const item = await itemRef.get();
+    if (!item.exists) return { type: type, error: 'item gone' };
+    const d = item.data();    
+    if (d.status === 'sold') return { type: type, error: 'already sold' };
+    await itemRef.update({ status: 'sold', soldTo: uid, soldAt: Date.now() });
+    await db.collection('users').doc(uid).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(itemId) }, { merge: true });
+    await db.collection('sales').add({ itemId: itemId, item: d.name, price: d.price, sellerId: d.sellerId, sellerWallet: d.sellerWallet, buyerId: uid, currency: currency, txHash: txHash, at: Date.now() });    await notifyOwner('🛒 <b>ITEM SOLD!</b>\n\n📦 ' + d.name + '\n💵 Price: ' + d.price + '\n👛 Seller wallet: <code>' + (d.sellerWallet || 'none') + '</code>\n\nSend the seller their money.');
+    return { type: type, uid: uid, itemId: itemId, link: d.link };  
+  }
+  return { type: 'unknown' };
+}
+
+app.post('/api/check-payment', async (req, res) => {
+  try {
+    const memo = req.body.memo;
+    if (!memo) return res.status(400).json({ error: 'Memo required' });    
+    const snap = await db.collection('payments').where('memo', '==', memo).where('status', '==', 'confirmed').limit(1).get();
+    if (snap.empty) return res.json({ confirmed: false });
+    const p = snap.docs[0].data();
+    res.json({ confirmed: true, type: p.payType, link: p.link || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/process-payment', async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body.txHash || !body.memo) return res.status(400).json({ error: 'Missing fields' });
+    const exist = await db.collection('payments').where('txHash', '==', body.txHash).limit(1).get();    
+    if (!exist.empty) return res.json({ success: true, message: 'already processed' });
+    const result = await applyPayment(body.memo, body.amount, body.currency, body.txHash, body.sender);
+    await db.collection('payments').add({ txHash: body.txHash, memo: body.memo, amount: body.amount, currency: body.currency, sender: body.sender, status: 'confirmed', payType: result.type, link: result.link || null, at: Date.now() });
+    res.json({ success: true, result: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/admin/payments/:pid/approve', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const ref = db.collection('payments').doc(req.params.pid);    
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    const p = doc.data();
+    const result = await applyPayment(p.memo, p.amount, 'NGN', p.ref, p.ownerId);
+    await ref.update({ status: 'confirmed', payType: result.type, link: result.link || null });
+    res.json({ success: true, result: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });  
+  }
+});
+
+app.get('/api/user/:uid/profile', async (req, res) => {  try {
+    const doc = await db.collection('users').doc(req.params.uid).get();
+    res.json({ success: true, profile: doc.exists ? doc.data() : { isPremium: false } });  
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/store/templates', async (req, res) => {
+  try {    
+    const snap = await db.collection('storeTemplates').where('active', '==', true).get();
+    const t = [];
+    snap.forEach(function(d) { t.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, templates: t });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/store/add', async (req, res) => {
+  try {
+    const key = req.headers['x-admin-key'];
+    if (!key || key !== process.env.OWNER_KEY) return res.status(403).json({ error: 'Invalid owner key' });
+    const item = req.body;    
+    if (!item.name || !item.price) return res.status(400).json({ error: 'Name and price required' });
+    const doc = await db.collection('storeTemplates').add(Object.assign({}, item, { sellerId: 'OWNER', sellerWallet: '', status: 'available', active: true, createdAt: Date.now() }));
+    res.json({ success: true, id: doc.id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/store/upload', async (req, res) => {
+  try {
+    const b = req.body;
+    if (!b.sellerId || !b.name || !b.link) return res.status(400).json({ error: 'Missing fields' });
+    const doc = await db.collection('storeTemplates').add({ name: b.name, desc: b.desc || '', icon: b.icon || 'bi-robot', type: b.type || 'bot', link: b.link, price: b.price || '1 TON', sellerId: b.sellerId, sellerWallet: b.wallet || '', status: 'available', active: true, createdAt: Date.now() });
+    await notifyOwner('📦 <b>New store upload!</b>\n\n🏷 ' + b.name + '\n👤 Seller: ' + b.sellerId + '\n👛 Seller wallet: <code>' + (b.wallet || 'none') + '</code>');    
+    res.json({ success: true, id: doc.id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/store/purchase', async (req, res) => {
+  try {    
+    const b = req.body;
+    await db.collection('users').doc(b.userId).set({ purchasedTemplates: admin.firestore.FieldValue.arrayUnion(b.templateId) }, { merge: true });
+    res.json({ success: true });
+  } catch (e) {    res.status(500).json({ error: e.message });
+  }
+});
+
+cron.schedule('0 0 * * *', async () => {
+  try {
+    const now = new Date().toISOString();
+    const snap = await db.collection('users').where('isPremium', '==', true).where('premiumExpiresAt', '<', now).get();
+    for (const d of snap.docs) await d.ref.update({ isPremium: false });
+  } catch (e) {    
+    console.error('[cron] premium expiry error:', e.message);
+  }
+});
+
+function adminAuth(req) {
+  const key = req.headers['x-admin-key'];
+  return key && key === process.env.ADMIN_KEY;
+}
+
+app.get('/api/admin/chats', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
+    const snap = await db.collection('chats').orderBy('lastAt', 'desc').limit(50).get();
+    const chats = [];    
+    snap.forEach(function (d) { chats.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, chats: chats });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/admin/chat/:uid', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
+    const snap = await db.collection('chats').doc(req.params.uid).collection('messages').orderBy('at', 'asc').limit(200).get();
+    const messages = [];
+    snap.forEach(function (d) { messages.push(Object.assign({ id: d.id }, d.data())); });
+    res.json({ success: true, messages: messages });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/chat/:uid/send', async function (req, res) {
+  try {
+    if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid owner key' });
+    const text = req.body.text;
+    if (!text) return res.status(400).json({ error: 'Text required' });
+    await db.collection('chats').doc(req.params.uid).collection('messages').add({ from: 'admin', text: text, at: Date.now() });
+    await db.collection('chats').doc(req.params.uid).set({ userId: req.params.uid, lastMsg: text, lastAt: Date.now() }, { merge: true });    
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/payments', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var snap = await db.collection('payments').where('status', '==', 'pending').get();
+    var payments = [];
+    snap.forEach(function (d) { payments.push(Object.assign({ id: d.id }, d.data())); });
+    payments.sort(function (a, b) { return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0); });
+    res.json({ success: true, payments: payments });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/payments/:id/confirm', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    var doc = await db.collection('payments').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'Not found' });
+    var p = doc.data();
+    await db.collection('payments').doc(req.params.id).update({
+      status: 'confirmed',
+      confirmedAt: Date.now(),
+      confirmedBy: 'owner'
+    });
+    if (p.ownerId && (p.payMode === 'premium' || !p.payMode)) {
+      await db.collection('users').doc(p.ownerId).update({        
+        plan: 'premium',
+        planUpgradedAt: Date.now()
+      });
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/payments/:id/reject', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    await db.collection('payments').doc(req.params.id).update({ status: 'rejected', rejectedAt: Date.now() });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/store/:id', async function (req, res) {
+  if (!adminAuth(req)) return res.status(403).json({ error: 'Invalid admin key' });
+  try {
+    await db.collection('storeTemplates').doc(req.params.id).delete();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, function() {
-  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
+app.listen(PORT, function() {  console.log('Clur Backend ' + SERVER_VERSION + ' on port ' + PORT);
   console.log('[payments] Supported Auto-Pay coins:', AUTO_PAY_COINS.join(', '));
   engine.loadAllBots();
   const APP_URL = process.env.APP_URL || '';
