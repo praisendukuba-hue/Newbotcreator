@@ -745,7 +745,8 @@ async function startBot(cfgIn) {
       ]
     };
 
-    if (currency === 'Naira' || currency === 'Airtime' || currency === 'MB') {
+    // ✅ FIXED: Strictly follow the requireApproval toggle
+    if (requireApproval) {
       const initialBtns = { 
         reply_markup: { 
           inline_keyboard: [
@@ -756,72 +757,59 @@ async function startBot(cfgIn) {
       };
       try {
         await bot.sendMessage(normchan(payout), wdMsg, initialBtns);        
-        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin to process manually.</i>`, { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        await got.ref.update({ balance: FieldValue.increment(amount) });
-        await wdRef.update({ status: 'failed' });
-        bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-      return;
-    }
-
-    if (requireApproval || !isAutoPayCoin(currency)) {
-      const initialBtns = { 
-        reply_markup: { 
-          inline_keyboard: [
-            [{ text: '✅ Approve', callback_data: `ap_wd_${uid}_${amount}_${wdKey}` }, { text: '❌ Decline', callback_data: `dec_wd_${uid}_${amount}_${wdKey}` }]
-          ] 
-        }, 
-        parse_mode: 'HTML' 
-      };
-      try {
-        await bot.sendMessage(normchan(payout), wdMsg, initialBtns);
         bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
         await got.ref.update({ balance: FieldValue.increment(amount) });
         await wdRef.update({ status: 'failed' });
         bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
       }
-    } else {      bot.sendMessage(uid, `⏳ <b>Processing withdrawal...</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}`, { parse_mode: 'HTML' }).catch(() => {});
+    } else {
+      // Admin approval is OFF. Process normally without Approve/Decline buttons.
       
-      try {
-        let success = false;
-        let txHash = '';
+      if (isAutoPayCoin(currency)) {
+        bot.sendMessage(uid, `⏳ <b>Processing withdrawal...</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}`, { parse_mode: 'HTML' }).catch(() => {});
         
-        if (pay === 'AutoPay1') {            
-          const result = await sendPTPayment({ botId, apiKey, currency, wallet: got.data.wallet, amount: cleanReceived, comment: name });
-          success = result.success;
-          txHash = result.txHash;
-        } else if (pay === 'AutoPay2') {
-          const result = await sendXRocketPayment({ botId, apiKey, uid, currency, amount: cleanReceived, description: name });
-          success = result.paid;
-          txHash = result.payoutId;
-        } else {
-          throw new Error('No valid AutoPay method configured.');
+        try {
+          let success = false;
+          let txHash = '';
+          
+          if (pay === 'AutoPay1') {            
+            const result = await sendPTPayment({ botId, apiKey, currency, wallet: got.data.wallet, amount: cleanReceived, comment: name });
+            success = result.success;
+            txHash = result.txHash;
+          } else if (pay === 'AutoPay2') {
+            const result = await sendXRocketPayment({ botId, apiKey, uid, currency, amount: cleanReceived, description: name });
+            success = result.paid;
+            txHash = result.payoutId;
+          }
+          if (success) {
+            await wdRef.update({ status: 'paid', txHash, paidAt: Date.now() });
+            
+            const successMsg = `✅ <b>WITHDRAWAL PROCESSED</b>\n\nThe withdrawal has been successfully processed via Auto-Pay.\n\n💰 Amount: <b>${amount} ${esc(currency)}</b>\n💳 Fee: <b>${feeAmount} ${esc(currency)}</b>\n✅ User Receives: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n💳 TX: ${txHash ? esc(txHash) : 'N/A'}`;
+            
+            await notifyPayout(successMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
+            
+            bot.sendMessage(uid, `✅ <b>Withdrawal Paid!</b>\n\n💰 ${receivedAmount} ${esc(currency)} sent to:\n${esc(details)}${txHash ? '\n\n💳 TX: <code>' + esc(txHash) + '</code>' : ''}`, { parse_mode: 'HTML' }).catch(() => {});
+          } else {
+            throw new Error('Payment provider returned failure.');
+          }
+        } catch (e) {
+          const err = providerError(e, 'Payment failed');
+          console.log(`[engine:${botId}] ❌ Auto-Pay ERROR: ${err}`);
+          await got.ref.update({ balance: FieldValue.increment(amount) }); 
+          await wdRef.update({ status: 'failed', error: err });
+          
+          const failMsg = `❌ <b>WITHDRAWAL FAILED</b>\n\nThe auto-pay withdrawal failed.\n\n💰 Amount: <b>${amount} ${esc(currency)}</b>\n📋 Details: ${esc(details)}\n⚠️ Error: ${esc(err).slice(0, 300)}\n\n<i>User balance has been refunded.</i>`;
+          
+          await notifyPayout(failMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
+          
+          bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
         }
-
-        if (success) {
-          await wdRef.update({ status: 'paid', txHash, paidAt: Date.now() });
-          
-          const successMsg = `✅ <b>WITHDRAWAL PROCESSED</b>\n\nThe withdrawal has been successfully processed via Auto-Pay.\n\n💰 Amount: <b>${amount} ${esc(currency)}</b>\n💳 Fee: <b>${feeAmount} ${esc(currency)}</b>\n✅ User Receives: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n💳 TX: ${txHash ? esc(txHash) : 'N/A'}`;
-          
-          await notifyPayout(successMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
-          
-          bot.sendMessage(uid, `✅ <b>Withdrawal Paid!</b>\n\n💰 ${receivedAmount} ${esc(currency)} sent to:\n${esc(details)}${txHash ? '\n\n💳 TX: <code>' + esc(txHash) + '</code>' : ''}`, { parse_mode: 'HTML' }).catch(() => {});
-        } else {
-          throw new Error('Payment provider returned failure.');
-        }
-      } catch (e) {
-        const err = providerError(e, 'Payment failed');
-        console.log(`[engine:${botId}] ❌ Auto-Pay ERROR: ${err}`);
-        await got.ref.update({ balance: FieldValue.increment(amount) }); 
-        await wdRef.update({ status: 'failed', error: err });
-        
-        const failMsg = `❌ <b>WITHDRAWAL FAILED</b>\n\nThe auto-pay withdrawal failed.\n\n💰 Amount: <b>${amount} ${esc(currency)}</b>\n📋 Details: ${esc(details)}\n⚠️ Error: ${esc(err).slice(0, 300)}\n\n<i>User balance has been refunded.</i>`;
-        
-        await notifyPayout(failMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
-        
-        bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
+      } else {
+        // Not an auto-pay coin, and approval is OFF. Just send the normal message without approve/decline buttons.
+        await notifyPayout(wdMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
+        bot.sendMessage(uid, `✅ <b>Withdrawal Processed!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>Your withdrawal has been processed.</i>`, { parse_mode: 'HTML' }).catch(() => {});
+        await wdRef.update({ status: 'paid', paidAt: Date.now() });
       }
     }
   }
@@ -831,7 +819,8 @@ async function restartBot(botId) {
   await stopBot(botId);
   try {
     const snap = await db.collection('bots').doc(botId).get();
-    if (!snap.exists) return;    const cfg = Object.assign({ id: snap.id }, snap.data());
+    if (!snap.exists) return;
+    const cfg = Object.assign({ id: snap.id }, snap.data());
     if (cfg.status === 'active') await startBot(cfg);
   } catch (e) { console.error(`[engine:${botId}] ❌ restart error: ${e.message}`); }
 }
@@ -842,8 +831,7 @@ async function loadAllBots() {
     console.log(`[engine] 🔄 loading ${snap.size} bots sequentially...`);
     let i = 0;    
     for (const d of snap.docs) {
-      try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }
-      catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
+      try { await startBot(Object.assign({ id: d.id }, d.data())); console.log(`[engine] ✅ Loaded bot ${i + 1}/${snap.size}: ${d.data().name}`); }      catch (e) { console.error(`[engine:${d.id}] ❌ start fail:`, e.message); }
       i++;      
       if (i % 5 === 0) await new Promise(r => setTimeout(r, 800));
     }
