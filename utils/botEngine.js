@@ -99,7 +99,10 @@ function setA(key, type, extra) {
 function getA(key) {  
   const a = awaiting[key];
   if (!a) return null;
-  if (Date.now() > a.exp) { delete awaiting[key]; return null; }
+  if (Date.now() > a.exp) { 
+    delete awaiting[key]; 
+    return null; 
+  }
   return a;
 }
 
@@ -142,10 +145,10 @@ async function sendPTPayment({ botId, apiKey, currency, wallet, amount, comment 
   else if (ptConfig.type === 'bep20') { payload.token_address = ptConfig.tokenAddress; payload.comment = comment || 'Clur Bot withdrawal'; }
   else if (ptConfig.type === 'bnb') payload.comment = comment || 'Clur Bot withdrawal';
   
-  console.log(`[engine:${botId}] AutoPay1 request: ${currency} (${ptConfig.blockchain}) → ${wallet} (${amount})`);
-  const response = await axios.post(ptConfig.url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true });
+  console.log(`[engine:${botId}] AutoPay1 request: ${currency} (${ptConfig.blockchain}) → ${wallet} (${amount})`);  const response = await axios.post(ptConfig.url, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 30000, validateStatus: () => true });
   const d = response.data || {};
-  if (response.status < 200 || response.status >= 300) {            throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  
+  if (response.status < 200 || response.status >= 300) {        
+    throw new Error(String(d.detail || d.message || d.error || 'HTTP ' + response.status).slice(0, 300));  
   }
   const txHash = d.tx_hash || d.txHash || d.hash || d.transaction || d.transactionHash || d.tx || d.id || '';
   const success = d.success === true || d.ok === true || d.status === 'success' || d.status === 'completed' || d.status === 'paid' || !!txHash;
@@ -191,10 +194,10 @@ async function startBot(cfgIn) {
   const prev = tokenOwner[cfg.token];
   if (prev && prev !== botId) { console.log(`[engine:${botId}] Token belongs to another bot ID (${prev}), stopping it first...`); await stopBot(prev); }
 
-  const bot = new TelegramBot(cfg.token, { polling: true });
-  activeBots[botId] = { bot, cfg };
+  const bot = new TelegramBot(cfg.token, { polling: true });  activeBots[botId] = { bot, cfg };
   tokenOwner[cfg.token] = botId;
-  botErrors[botId] = 0;    
+  botErrors[botId] = 0;  
+  
   let currency = cfg.currency || '';
   // ✅ Rename 'Data' to 'MB' as requested
   if (currency === 'Data') currency = 'MB';
@@ -240,9 +243,9 @@ async function startBot(cfgIn) {
     if (isAuthError(err)) deactivate('Auth error: ' + msg.slice(0, 100));
     else if (/409/.test(msg)) console.log(`[engine:${botId}] ⚠️ 409 conflict - another poller is running`);
     else if (/ETELEGRAM|network|timeout|ECONNRESET|socket hang/i.test(msg)) {
-      if (botErrors[botId] % 10 === 1) console.log(`[engine:${botId}] network blip (${botErrors[botId]} total): ${msg.slice(0, 100)}`);
-    } else console.log(`[engine:${botId}] polling error: ${msg.slice(0, 150)}`);
+      if (botErrors[botId] % 10 === 1) console.log(`[engine:${botId}] network blip (${botErrors[botId]} total): ${msg.slice(0, 100)}`);    } else console.log(`[engine:${botId}] polling error: ${msg.slice(0, 150)}`);
   });
+
   bot.on('error', (err) => {
     const msg = String(err).slice(0, 100);
     if (isAuthError(err)) deactivate('Bot error: ' + msg);    
@@ -289,10 +292,10 @@ async function startBot(cfgIn) {
     if (currency === 'Naira') walletBtnText = '🏦 Bank Details';
     if (currency === 'Airtime' || currency === 'MB') walletBtnText = '📱 Phone Number';
 
-    const keyboard = [
-      [{ text: '💼 Balance' }, { text: '🤝 Invite' }], 
+    const keyboard = [      [{ text: '💼 Balance' }, { text: '🤝 Invite' }], 
       [{ text: '📝 Tasks' }, { text: '💳 Withdraw' }],
-      [{ text: walletBtnText }]    ];
+      [{ text: walletBtnText }]
+    ];
     return { reply_markup: { keyboard, resize_keyboard: true }, parse_mode: 'HTML' };
   };
 
@@ -338,10 +341,10 @@ async function startBot(cfgIn) {
   bot.onText(/\/start(?:\s+(\d+))?/, safe(async (msg, match) => {
     const uid = msg.chat.id;
     const key = botId + ':' + uid;
-    delete awaiting[key];
-    const alive = await refreshCfg();
+    delete awaiting[key];    const alive = await refreshCfg();
     if (!alive) return;
-    const got = await getUser(botId, uid);    if (got.data.banned) return bot.sendMessage(uid, ' <b>You are banned from this bot.</b>', { parse_mode: 'HTML' }).catch(() => {});
+    const got = await getUser(botId, uid);
+    if (got.data.banned) return bot.sendMessage(uid, ' <b>You are banned from this bot.</b>', { parse_mode: 'HTML' }).catch(() => {});
     if (got.isNew) await db.collection('bots').doc(botId).update({ users: FieldValue.increment(1) }).catch(() => {});
     await db.collection('bots').doc(botId).update({ lastActive: Date.now() }).catch(() => {});
 
@@ -354,9 +357,11 @@ async function startBot(cfgIn) {
     await showChannels(uid);
   }));
 
+  // ✅ FIXED: Rock-solid state management to prevent loops
   bot.on('message', safe(async (msg) => {
     const uid = msg.chat.id;
     const key = botId + ':' + uid;
+    
     if (lastMsg[key] === msg.message_id) return;
     lastMsg[key] = msg.message_id;
     
@@ -364,25 +369,19 @@ async function startBot(cfgIn) {
     const hasPhoto = msg.photo && msg.photo.length > 0;
     
     if (!txt && !hasPhoto) return;
-    if (txt.startsWith('/') && !hasPhoto) { delete awaiting[key]; return; }
+    if (txt.startsWith('/') && !hasPhoto) { 
+      delete awaiting[key]; 
+      return; 
+    }
     
     const got = await getUser(botId, uid);
     if (got.data.banned) return bot.sendMessage(uid, '🚫 <b>You are banned.</b>', { parse_mode: 'HTML' }).catch(() => {});
 
     const st = getA(key);    
     if (st) {
+      // Clear the state immediately after retrieving it to prevent loops
       delete awaiting[key];
       
-      if (st.type === 'captcha') {
-        if (parseInt(txt, 10) === st.answer) {
-          await got.ref.update({ captchaPassed: true });
-          bot.sendMessage(uid, '✅ <b>Human verified!</b>', { parse_mode: 'HTML' }).catch(() => {});
-          return bot.sendMessage(uid, ' <b>' + esc(name) + ' Menu</b>\n\nTap an option below:', menuKeyboard()).catch(() => {});
-        }
-        return askCaptcha(uid, key, true);
-      }
-      
-      // ✅ Professional Wallet Setup Flows
       if (st.type === 'naira_bank_name') {
         st.bankName = txt;
         setA(key, 'naira_bank_acct', st);        
@@ -390,8 +389,8 @@ async function startBot(cfgIn) {
       }
 
       if (st.type === 'naira_bank_acct') {
-        st.bankAcct = txt;        setA(key, 'naira_bank_name_full', st);
-        return bot.sendMessage(uid, '👤 <b>Enter Account Name</b>\n\nExample: John Doe', { parse_mode: 'HTML' }).catch(() => {});
+        st.bankAcct = txt;
+        setA(key, 'naira_bank_name_full', st);        return bot.sendMessage(uid, '👤 <b>Enter Account Name</b>\n\nExample: John Doe', { parse_mode: 'HTML' }).catch(() => {});
       }
 
       if (st.type === 'naira_bank_name_full') {
@@ -399,10 +398,6 @@ async function startBot(cfgIn) {
         const details = `Bank: ${st.bankName}, Acct: ${st.bankAcct}, Name: ${st.bankNameFull}`;
         await got.ref.update({ wallet: details, withdrawDetails: details });
         return bot.sendMessage(uid, '✅ <b>Your account details have been successfully saved!</b>\n\nYou can now click "💳 Withdraw" to withdraw your balance.', { parse_mode: 'HTML' }).catch(() => {});
-      }
-
-      if (st.type === 'set_phone_network') {
-        // handled by callback
       }
 
       if (st.type === 'set_phone_direct') {
@@ -439,12 +434,12 @@ async function startBot(cfgIn) {
       setA(key, 'naira_bank_name');
       return bot.sendMessage(uid, '🏦 <b>Enter Bank Name</b>\n\nExample: GTBank, First Bank, etc.', { parse_mode: 'HTML' }).catch(() => {});
     }
+
     if (txt === '📱 Phone Number' && (currency === 'Airtime' || currency === 'MB')) {
       if (botNetwork === 'All') {
         setA(key, 'set_phone_network');
         const rows = [
-          [{ text: '🟡 MTN', callback_data: 'set_net_MTN' }, { text: '🔴 AIRTEL', callback_data: 'set_net_AIRTEL' }],
-          [{ text: '🟢 GLO', callback_data: 'set_net_GLO' }, { text: '🟣 9MOBILE', callback_data: 'set_net_9MOBILE' }]
+          [{ text: '🟡 MTN', callback_data: 'set_net_MTN' }, { text: '🔴 AIRTEL', callback_data: 'set_net_AIRTEL' }],          [{ text: '🟢 GLO', callback_data: 'set_net_GLO' }, { text: '🟣 9MOBILE', callback_data: 'set_net_9MOBILE' }]
         ];
         return bot.sendMessage(uid, '📶 <b>Select Your Network</b>\n\nChoose the network you want to link to your account.', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
       } else {
@@ -488,12 +483,12 @@ async function startBot(cfgIn) {
         let m;
         try { m = await bot.getChatMember(chan, uid); } catch (e) {
           return bot.answerCallbackQuery(cq.id, { text: '️ Bot is not admin in ' + ch + ' — contact the owner.', show_alert: true }).catch(() => {});
-        }        if (m.status === 'left' || m.status === 'kicked') {
+        }
+        if (m.status === 'left' || m.status === 'kicked') {
           return bot.answerCallbackQuery(cq.id, { text: '❌ Please join ' + ch + ' first!', show_alert: true }).catch(() => {});
         }
       }
-      await bot.answerCallbackQuery(cq.id, { text: '✅ Channels verified!' }).catch(() => {});
-      if (botDetect) {
+      await bot.answerCallbackQuery(cq.id, { text: '✅ Channels verified!' }).catch(() => {});      if (botDetect) {
         const got = await getUser(botId, uid);
         if (!got.data.captchaPassed) return askCaptcha(uid, key, false);
       }
@@ -537,12 +532,12 @@ async function startBot(cfgIn) {
       if (st && st.type === 'set_phone_network') {
         delete awaiting[key];
         setA(key, 'set_phone_direct', { network: network });
-        await bot.answerCallbackQuery(cq.id, { text: 'Selected ' + network }).catch(() => {});        return bot.sendMessage(uid, `📱 <b>Please input your ${esc(network)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
+        await bot.answerCallbackQuery(cq.id, { text: 'Selected ' + network }).catch(() => {});
+        return bot.sendMessage(uid, `📱 <b>Please input your ${esc(network)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
 
-    if (cq.data && (cq.data.startsWith('ap_prf_') || cq.data.startsWith('dec_prf_'))) {
-      const isApprove = cq.data.startsWith('ap_prf_');
+    if (cq.data && (cq.data.startsWith('ap_prf_') || cq.data.startsWith('dec_prf_'))) {      const isApprove = cq.data.startsWith('ap_prf_');
       const parts = cq.data.split('_');
       const proofUid = parts[2];
       const reward = parseFloat(parts[3]) || 0;
@@ -586,12 +581,12 @@ async function startBot(cfgIn) {
       const chatId = cq.message.chat.id;
       const clickerId = cq.from.id;
       
-      try {        const member = await bot.getChatMember(chatId, clickerId);
+      try {
+        const member = await bot.getChatMember(chatId, clickerId);
         if (member.status !== 'creator' && member.status !== 'administrator') {
           return bot.answerCallbackQuery(cq.id, { text: '️ Only channel admins can approve/decline!', show_alert: true }).catch(() => {});
         }
       } catch (e) {}
-
       const wdRef = db.collection('bots').doc(botId).collection('withdrawals').doc(wdKey);
       const wdSnap = await wdRef.get();
       
@@ -635,12 +630,12 @@ async function startBot(cfgIn) {
       };
 
       try {
-        await sendProof(primaryTarget, false);        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});
+        await sendProof(primaryTarget, false);
+        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});
       } catch (e) {
         if (fallbackTarget && fallbackTarget !== primaryTarget) {
           try { await sendProof(fallbackTarget, true); bot.sendMessage(uid, '✅ Proof sent to payout channel (fallback) for review!', { parse_mode: 'HTML' }).catch(() => {}); }
-          catch (e2) { throw new Error(`Both primary and fallback failed.`); }
-        } else { throw e; }
+          catch (e2) { throw new Error(`Both primary and fallback failed.`); }        } else { throw e; }
       }
     } catch (e) {
       let errorMsg = ' Failed to send proof.';
@@ -660,8 +655,11 @@ async function startBot(cfgIn) {
     await bot.sendMessage(uid, '<b>🎁 INVITE & EARN</b>\n\n━━━━━━━━━━━━━━\n\n💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>\n\n🎁 Your referrals: ' + (got.data.refs || 0) + '\n\n━━━━━━━━━━━━━━\n\nYour link:\n<code>https://t.me/' + me.username + '?start=' + uid + '</code>', { parse_mode: 'HTML' }).catch(() => {});
   }
 
-  function taskRows(completed = []) {      const isCompleted = completed.includes(t.n);
+  function taskRows(completed = []) {      
+    return tasks.map((t, i) => {
+      const isCompleted = completed.includes(t.n);
       return [{ text: (isCompleted ? '✅ ' : '') + (i + 1) + '. ' + t.n + (t.reward ? ' (+' + t.reward + ')' : ''), callback_data: isCompleted ? 'task_completed_' + i : 'task_' + i }];
+    });
   }
 
   async function handleTasks(uid) {
@@ -684,8 +682,8 @@ async function startBot(cfgIn) {
       uid: String(uid), amount, fee: feeAmount, received: receivedAmount, currency, status: 'pending', details, at: Date.now()
     });
     const wdKey = wdRef.id;
-    await got.ref.update({ balance: FieldValue.increment(-amount) });
 
+    await got.ref.update({ balance: FieldValue.increment(-amount) });
     const uname = await getUsername(uid);
     const feeText = feeAmount > 0 ? `💳 Fee: ${feeAmount} ${esc(currency)}\n` : '';
     const wdMsg = `📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n🤖 Bot: ${esc(name)}\n\n👤 User ID: <code>${uid}</code>\n\n🧑 User: ${esc(uname || 'no username')}\n\n💰 Requested Amount: <b>${amount} ${esc(currency)}</b>\n${feeText}📤 User Will Receive: <b>${receivedAmount} ${esc(currency)}</b>\n\n📋 Details: ${esc(details)}\n\n⚠️ Status: <b>PENDING</b>\n\n🕒 ${new Date().toLocaleString()}`;
@@ -733,9 +731,9 @@ async function startBot(cfgIn) {
         parse_mode: 'HTML' 
       };
       try {
-        await bot.sendMessage(normchan(payout), wdMsg, btns);        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        await got.ref.update({ balance: FieldValue.increment(amount) });
+        await bot.sendMessage(normchan(payout), wdMsg, btns);
+        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n📋 ${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
+      } catch (e) {        await got.ref.update({ balance: FieldValue.increment(amount) });
         await wdRef.update({ status: 'failed' });
         bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
       }
@@ -782,9 +780,9 @@ async function startBot(cfgIn) {
 async function restartBot(botId) {
   await stopBot(botId);
   try {
-    const snap = await db.collection('bots').doc(botId).get();    if (!snap.exists) return;
-    const cfg = Object.assign({ id: snap.id }, snap.data());
-    if (cfg.status === 'active') await startBot(cfg);
+    const snap = await db.collection('bots').doc(botId).get();
+    if (!snap.exists) return;
+    const cfg = Object.assign({ id: snap.id }, snap.data());    if (cfg.status === 'active') await startBot(cfg);
   } catch (e) { console.error(`[engine:${botId}] ❌ restart error: ${e.message}`); }
 }
 
