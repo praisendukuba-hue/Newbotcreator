@@ -3,7 +3,7 @@ const axios = require('axios');
 const { db } = require('../firebase');
 const { FieldValue } = require('firebase-admin/firestore');
 
-const POWERED_BY = 'Clurbotcreatybot';
+const POWERED_BY = 'Clurbotcreatybot'; // ✅ Updated to match your exact username
 const OFFICIAL_URL = 'https://t.me/DAILYUUPA';
 
 const activeBots = {};
@@ -639,9 +639,11 @@ async function startBot(cfgIn) {
       const wdDetails = wdData.details || 'N/A';
       
       const currentBotUsername = activeBots[botId]?.botUsername || POWERED_BY;
+      
+      // ✅ THIS IS THE EXACT LINE RESPONSIBLE FOR THE "CREATE BOT" LINK
       const promoKeyboard = {
         inline_keyboard: [
-          [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: 'https://t.me/Clurbotcreatiobot' }]
+          [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: 'https://t.me/Clurbotcreatybot' }]
         ]
       };
 
@@ -682,9 +684,9 @@ async function startBot(cfgIn) {
             await wdRef.update({ status: 'failed', error: err });
             
             const failedMsg = `❌ <b>WITHDRAWAL APPROVED BUT FAILED!</b>\n\nAuto-Pay failed.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n${esc(wdDetails)}\n⚠️ Error: ${esc(err).slice(0, 200)}\n\n<i>User balance has been refunded.</i>`;
+                        const editOptions = { chat_id: chatId, message_id: cq.message.message_id, parse_mode: 'HTML', reply_markup: promoKeyboard };
+            bot.editMessageText(failedMsg, editOptions).catch(() => {});
             
-            const editOptions = { chat_id: chatId, message_id: cq.message.message_id, parse_mode: 'HTML', reply_markup: promoKeyboard };
-            bot.editMessageText(failedMsg, editOptions).catch(() => {});            
             bot.sendMessage(wdUid, `❌ <b>WITHDRAWAL FAILED</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
             await bot.answerCallbackQuery(cq.id, { text: '❌ Failed' }).catch(() => {});
           }
@@ -731,9 +733,9 @@ async function startBot(cfgIn) {
 
       try {
         await sendProof(primaryTarget, false);
-        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
-        if (fallbackTarget && fallbackTarget !== primaryTarget) {          try { await sendProof(fallbackTarget, true); bot.sendMessage(uid, '✅ Proof sent to payout channel (fallback) for review!', { parse_mode: 'HTML' }).catch(() => {}); }
+        bot.sendMessage(uid, '✅ Proof sent to task channel for review!', { parse_mode: 'HTML' }).catch(() => {});      } catch (e) {
+        if (fallbackTarget && fallbackTarget !== primaryTarget) {
+          try { await sendProof(fallbackTarget, true); bot.sendMessage(uid, '✅ Proof sent to payout channel (fallback) for review!', { parse_mode: 'HTML' }).catch(() => {}); }
           catch (e2) { throw new Error(`Both primary and fallback failed.`); }
         } else { throw e; }
       }
@@ -780,9 +782,9 @@ async function startBot(cfgIn) {
     if (!Array.isArray(tasks) || tasks.length === 0) {
       return bot.sendMessage(uid, '📋 <b>No tasks available yet.</b>\n\n<i>Check back later for new tasks!</i>', { parse_mode: 'HTML' }).catch(() => {});
     }
-    
-    const rows = taskRows(completed);
-    await bot.sendMessage(uid,       `📋 <b>AVAILABLE TASKS</b>\n\n` +
+        const rows = taskRows(completed);
+    await bot.sendMessage(uid, 
+      `📋 <b>AVAILABLE TASKS</b>\n\n` +
       `Tap a task below to complete it:\n\n` +
       `━━━━━━━━━━━━━━`, 
       { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }
@@ -807,9 +809,11 @@ async function startBot(cfgIn) {
     const wdMsg = `📥 <b>NEW WITHDRAWAL REQUEST</b>\n\n🤖 Bot: ${esc(name)}\n👤 User ID: <code>${uid}</code>\n🧑 User: ${esc(uname || 'no username')}\n\n💰 Requested: <b>${amount} ${esc(currency)}</b>\n💳 Fee: <b>${feeAmount} ${esc(currency)}</b>\n✅ User Receives: <b>${receivedAmount} ${esc(currency)}</b>\n\n${esc(details)}\n⚠️ Status: <b>PENDING</b>\n🕒 ${new Date().toLocaleString()}`;
 
     const currentBotUsername = activeBots[botId]?.botUsername || POWERED_BY;
+    
+    // ✅ THIS IS THE EXACT LINE RESPONSIBLE FOR THE "CREATE BOT" LINK
     const promoKeyboard = {
       inline_keyboard: [
-        [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: '@Clurbotcreatybot' }]
+        [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: 'https://t.me/Clurbotcreatybot' }]
       ]
     };
 
@@ -827,11 +831,11 @@ async function startBot(cfgIn) {
       };
       try {
         await bot.sendMessage(normchan(payout), wdMsg, approvalBtns);        
-        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});
-      } catch (e) {
+        bot.sendMessage(uid, `⏳ <b>Withdrawal Submitted!</b>\n\n💰 ${amount} ${esc(currency)}\n\n${esc(details)}\n\n<i>⏳ Waiting for admin approval.</i>`, { parse_mode: 'HTML' }).catch(() => {});      } catch (e) {
         await got.ref.update({ balance: FieldValue.increment(amount) });
         await wdRef.update({ status: 'failed' });
-        bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});      }
+        bot.sendMessage(uid, '❌ Failed to send withdrawal request. Balance refunded.', { parse_mode: 'HTML' }).catch(() => {});
+      }
     } else {
       bot.sendMessage(uid, `⏳ <b>Processing withdrawal...</b>\n\n💰 ${amount} ${esc(currency)}\n\n${esc(details)}`, { parse_mode: 'HTML' }).catch(() => {});
       
@@ -876,11 +880,11 @@ async function startBot(cfgIn) {
     }
   }
 }
-
 async function restartBot(botId) {
   await stopBot(botId);
   try {
-    const snap = await db.collection('bots').doc(botId).get();    if (!snap.exists) return;
+    const snap = await db.collection('bots').doc(botId).get();
+    if (!snap.exists) return;
     const cfg = Object.assign({ id: snap.id }, snap.data());
     if (cfg.status === 'active') await startBot(cfg);
   } catch (e) { console.error(`[engine:${botId}] ❌ restart error: ${e.message}`); }
