@@ -310,11 +310,11 @@ async function startBot(cfgIn) {
   const menuKeyboard = () => {
     let walletBtnText = '🔗 Wallet Address';
     if (currency === 'Naira') walletBtnText = '🏦 Bank Details';
-    if (currency === 'Airtime' || currency === 'MB') walletBtnText = '📱 Phone Number';
+    if (currency === 'Airtime' || currency === 'MB') walletBtnText = ' Phone Number';
 
     const keyboard = [
-      [{ text: ' Balance' }, { text: '👥 Invite' }], 
-      [{ text: ' Tasks' }, { text: '💳 Withdraw' }],
+      [{ text: '💼 Balance' }, { text: '👥 Invite' }], 
+      [{ text: ' Tasks' }, { text: ' Withdraw' }],
       [{ text: walletBtnText }]
     ];
     return { reply_markup: { keyboard, resize_keyboard: true }, parse_mode: 'HTML' };
@@ -353,16 +353,16 @@ async function startBot(cfgIn) {
 
   async function showChannels(uid) {    
     const allChannels = [];
-    allChannels.push({ text: '💼 Official', url: OFFICIAL_URL });
+    allChannels.push({ text: ' Official', url: OFFICIAL_URL });
     for (const ch of mustJoin) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
     for (const ch of nonMust) { allChannels.push({ text: '📢 Join', url: chanUrl(ch) }); }
-    if (payout) { allChannels.push({ text: '💰 Payment', url: chanUrl(payout) }); }
+    if (payout) { allChannels.push({ text: ' Payment', url: chanUrl(payout) }); }
 
     const rows = [];
     for (let i = 0; i < allChannels.length; i += 2) { rows.push(allChannels.slice(i, i + 2)); }
     rows.push([{ text: '✅ START', callback_data: 'continue' }]);
 
-    const welcomeMsg = '👋 <b>Welcome to ' + esc(name) + '!</b>\n\nHere\'s how it works:\n• Invite friends using your unique link\n• Earn ' + esc(currency) + ' for every friend who joins\n• Withdraw your earnings anytime\n\n <i>First, join our channels:</i>\n\n🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
+    const welcomeMsg = '👋 <b>Welcome to ' + esc(name) + '!</b>\n\nHere\'s how it works:\n• Invite friends using your unique link\n• Earn ' + esc(currency) + ' for every friend who joins\n• Withdraw your earnings anytime\n\n👉 <i>First, join our channels:</i>\n\n🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>';
     await bot.sendMessage(uid, welcomeMsg, { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
   }
 
@@ -476,7 +476,7 @@ async function startBot(cfgIn) {
 
     if (txt === '💼 Balance') return handleBalance(uid, got);
     if (txt === '👥 Invite') return handleInvite(uid, got);    
-    if (txt === ' Tasks') return handleTasks(uid);
+    if (txt === '📋 Tasks') return handleTasks(uid);
     
     if (txt === '🏦 Bank Details' && currency === 'Naira') {
       setA(key, 'naira_bank_name');
@@ -487,9 +487,9 @@ async function startBot(cfgIn) {
       if (botNetwork === 'All') {
         setA(key, 'set_phone_network');
         const rows = [
-          [{ text: '🟡 MTN', callback_data: 'set_net_MTN' }, { text: '🔴 AIRTEL', callback_data: 'set_net_AIRTEL' }],
+          [{ text: ' MTN', callback_data: 'set_net_MTN' }, { text: '🔴 AIRTEL', callback_data: 'set_net_AIRTEL' }],
           [{ text: '🟢 GLO', callback_data: 'set_net_GLO' }, { text: '🟣 9MOBILE', callback_data: 'set_net_9MOBILE' }]        ];
-        return bot.sendMessage(uid, '📶 <b>Select Your Network</b>\n\nChoose the network you want to link to your account.', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
+        return bot.sendMessage(uid, ' Select Your Network</b>\n\nChoose the network you want to link to your account.', { reply_markup: { inline_keyboard: rows }, parse_mode: 'HTML' }).catch(() => {});
       } else {
         setA(key, 'set_phone_direct', { network: botNetwork });
         return bot.sendMessage(uid, `📱 <b>Please input your ${esc(botNetwork)} number</b>\n\nExample: 08012345678`, { parse_mode: 'HTML' }).catch(() => {});
@@ -506,9 +506,9 @@ async function startBot(cfgIn) {
       
       const hasDetails = got.data.wallet && got.data.wallet !== 'Not Set';
       if (!hasDetails) {
-        let setupMsg = '️ <b>Withdrawal details not set!</b>\n\nPlease set up your withdrawal details first by clicking the ';
+        let setupMsg = '⚠️ <b>Withdrawal details not set!</b>\n\nPlease set up your withdrawal details first by clicking the ';
         if (currency === 'Naira') setupMsg += '"🏦 Bank Details"';
-        else if (currency === 'Airtime' || currency === 'MB') setupMsg += '"📱 Phone Number"';
+        else if (currency === 'Airtime' || currency === 'MB') setupMsg += '" Phone Number"';
         else setupMsg += '"🔗 Wallet Address"';
         setupMsg += ' button in the main menu.';
         return bot.sendMessage(uid, setupMsg, { parse_mode: 'HTML' }).catch(() => {});
@@ -562,7 +562,7 @@ async function startBot(cfgIn) {
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? '🎁 Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click " Open Task" to complete it.\n2️⃣ Click "📸 Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
+      return bot.sendMessage(uid, '📋 <b>' + esc(t.n) + '</b>\n\n' + (t.reward ? ' Prize: <b>' + t.reward + ' ' + esc(currency) + '</b>\n\n' : '') + '1️⃣ Click "🔗 Open Task" to complete it.\n2️⃣ Click " Submit Proof" and send your screenshot or text.', { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '🔗 Open Task', url: t.l }], [{ text: '📸 Submit Proof', callback_data: 'confirm_proof_' + idx }]] } }).catch(() => {});
     }
 
     if (cq.data && cq.data.indexOf('confirm_proof_') === 0) {      
@@ -570,7 +570,7 @@ async function startBot(cfgIn) {
       const t = tasks[idx];
       if (!t) return;
       setA(key, 'proof', { task: t.n, reward: Number(t.reward || 0) });
-      return bot.sendMessage(uid, ' <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    
+      return bot.sendMessage(uid, '📸 <b>Ready!</b>\n\nPlease send your proof now.\n<i>(You can send a photo/screenshot or a text message)</i>', { parse_mode: 'HTML' }).catch(() => {});    
     }
 
     if (cq.data && cq.data.startsWith('set_net_')) {
@@ -674,7 +674,7 @@ async function startBot(cfgIn) {
             if (result.success || result.paid) {
               await wdRef.update({ status: 'paid', paidAt: Date.now(), txHash: result.txHash || result.payoutId });
               
-              const approvedMsg = `✅ <b>WITHDRAWAL APPROVED & PAID!</b>\n\nProcessed via Auto-Pay.\n\n Amount: <b>${wdAmount} ${esc(currency)}</b>\n${esc(wdDetails)}\n\nThe funds have been sent automatically.`;
+              const approvedMsg = `✅ <b>WITHDRAWAL APPROVED & PAID!</b>\n\nProcessed via Auto-Pay.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n${esc(wdDetails)}\n\nThe funds have been sent automatically.`;
               
               const editOptions = { chat_id: chatId, message_id: cq.message.message_id, parse_mode: 'HTML', reply_markup: promoKeyboard };
               bot.editMessageText(approvedMsg, editOptions).catch(() => {});
@@ -715,7 +715,7 @@ async function startBot(cfgIn) {
         // DECLINE - NO REFUND
         await wdRef.update({ status: 'declined', declinedAt: Date.now() }).catch(() => {});
         
-        const declinedMsg = `❌ <b>WITHDRAWAL DECLINED</b>\n\nYour withdrawal request has been declined by the admin.\n\n Amount: <b>${wdAmount} ${esc(currency)}</b>\n${esc(wdDetails)}\n\n<i>Note: No refund will be issued.</i>`;
+        const declinedMsg = `❌ <b>WITHDRAWAL DECLINED</b>\n\nYour withdrawal request has been declined by the admin.\n\n💰 Amount: <b>${wdAmount} ${esc(currency)}</b>\n${esc(wdDetails)}\n\n<i>Note: No refund will be issued.</i>`;
         
         const editOptions = { chat_id: chatId, message_id: cq.message.message_id, parse_mode: 'HTML', reply_markup: promoKeyboard };
         bot.editMessageText(declinedMsg, editOptions).catch(() => {});
@@ -732,11 +732,11 @@ async function startBot(cfgIn) {
       const primaryTarget = normchan(taskProofChannel);      
       const fallbackTarget = normchan(payout);
       
-      const caption = `🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n User ID: <code>${uid}</code>\n📝 ${esc(msg.text || '(photo sent)')}`;
+      const caption = `🧾 <b>NEW TASK PROOF</b>\n\n📋 Task: ${esc(taskName)}\n🎁 Prize: ${reward} ${esc(currency)}\n👤 User ID: <code>${uid}</code>\n ${esc(msg.text || '(photo sent)')}`;
       const btns = { reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ap_prf_${uid}_${reward}` }, { text: '❌ Decline', callback_data: `dec_prf_${uid}_${reward}` }]] }, parse_mode: 'HTML' };
       const sendProof = async (targetId, isFallback) => {
         if (!targetId) throw new Error('No target channel ID provided');
-        const finalCaption = isFallback ? caption + `\n\n️ (Sent to fallback: ${targetId})` : caption;
+        const finalCaption = isFallback ? caption + `\n\n⚠️ (Sent to fallback: ${targetId})` : caption;
         if (hasPhoto) { await bot.sendPhoto(targetId, msg.photo[msg.photo.length - 1].file_id, { caption: finalCaption, ...btns }); }
         else { await bot.sendMessage(targetId, finalCaption, btns); }
       };
@@ -760,7 +760,7 @@ async function startBot(cfgIn) {
   }
 
   async function handleBalance(uid, got) {
-    await bot.sendMessage(uid, '<b> MY ACCOUNT</b>\n\n━━━━━━━━━━━━━━\n\n💼 Balance: <b>' + Number(got.data.balance || 0).toFixed(2) + ' ' + esc(currency) + '</b>\n\n🔗 Wallet: <code>' + esc(got.data.wallet) + '</code>\n\n👥 Referrals: ' + (got.data.refs || 0) + '\n\n💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>' + (fee > 0 ? '\n\n💳 Withdraw fee: <b>' + fee + ' ' + esc(currency) + '</b>' : '') + '\n\n━━━━━━━━━━━━━━\n Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>', { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
+    await bot.sendMessage(uid, '<b> MY ACCOUNT</b>\n\n━━━━━━━━━━━━━━\n\n💼 Balance: <b>' + Number(got.data.balance || 0).toFixed(2) + ' ' + esc(currency) + '</b>\n\n🔗 Wallet: <code>' + esc(got.data.wallet) + '</code>\n\n👥 Referrals: ' + (got.data.refs || 0) + '\n\n💎 Per referral: <b>' + refB + ' ' + esc(currency) + '</b>' + (fee > 0 ? '\n\n💳 Withdraw fee: <b>' + fee + ' ' + esc(currency) + '</b>' : '') + '\n\n━━━━━━━━━━━━━━\n🤖 Powered By: <a href="https://t.me/' + POWERED_BY + '">@' + POWERED_BY + '</a>', { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
   }
 
   async function handleInvite(uid, got) {
@@ -889,7 +889,7 @@ async function startBot(cfgIn) {
         
         await notifyPayout(failMsg, { parse_mode: 'HTML', reply_markup: promoKeyboard });
         
-        bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
+        bot.sendMessage(uid, `❌ <b>Payment failed</b>\n\n⚠️ ${esc(err).slice(0, 250)}\n\n💰 Balance refunded.`, { parse_mode: 'HTML' }).catch(() => {});
       }
     }
   }
