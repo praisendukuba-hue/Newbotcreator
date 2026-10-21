@@ -3,7 +3,7 @@ const axios = require('axios');
 const { db } = require('../firebase');
 const { FieldValue } = require('firebase-admin/firestore');
 
-const POWERED_BY = 'Clurbotcreatiobot';
+const POWERED_BY = 'Clurbotcreatybot';
 const OFFICIAL_URL = 'https://t.me/DAILYUUPA';
 
 const activeBots = {};
