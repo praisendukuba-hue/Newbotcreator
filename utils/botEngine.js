@@ -809,7 +809,7 @@ async function startBot(cfgIn) {
     const currentBotUsername = activeBots[botId]?.botUsername || POWERED_BY;
     const promoKeyboard = {
       inline_keyboard: [
-        [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: 'https://t.me/Clurbotcreatybot' }]
+        [{ text: '🤖 Join Bot', url: `https://t.me/${currentBotUsername}` }, { text: '🛠️ Create Bot', url: '@Clurbotcreatybot' }]
       ]
     };
 
